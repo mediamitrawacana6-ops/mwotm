@@ -1023,7 +1023,7 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
   const fotoData = await Promise.all(items.map(ambilFotoBase64));
   // Slide dengan lebih banyak kartu (ruang lebih sempit) → minta ringkasan AI lebih singkat
   // supaya tidak terpotong di tengah kalimat.
-  const targetKata = items.length >= 3 ? '40-55 kata dalam 1 paragraf utuh' : '55-75 kata dalam 1 paragraf utuh';
+  const targetKata = items.length >= 3 ? '30-45 kata dalam 1 paragraf utuh' : '45-60 kata dalam 1 paragraf utuh';
   const ringkasanData = await Promise.all(items.map(it => buatRingkasanCarousel(it, targetKata)));
 
   // Ukuran font & jumlah baris judul menyesuaikan kepadatan slide (ukuran aktual ditentukan
@@ -1051,7 +1051,7 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
     // bikin deskripsi muat penuh; kalau sampai ukuran judul terkecil pun deskripsi tetap belum
     // muat semua, tetap pakai ukuran judul terkecil itu (supaya ruang deskripsi paling lega) —
     // fitParagraphToBox akan memotongnya rapi sampai akhir kalimat, bukan di tengah kata.
-    const judulSizeOptions = kompak ? [23, 21, 19, 17, 16] : [26, 24, 22, 20, 18];
+    const judulSizeOptions = kompak ? [23, 21, 19, 17, 16, 15, 14] : [26, 24, 22, 20, 18, 16, 15];
     let judulFontSizeAktual, judulLineHAktual, judulLines, sisaTinggiDesk, fit;
     for (let opt = 0; opt < judulSizeOptions.length; opt++) {
       const jSize = judulSizeOptions[opt];
@@ -1064,7 +1064,7 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
         textAvailPx,
         sisa,
         kompak ? 18 : 20,   // font maksimum dicoba untuk deskripsi
-        10                  // font minimum sebelum dipotong sampai akhir kalimat
+        14                  // font minimum sebelum dipotong sampai akhir kalimat (jangan terlalu kecil)
       );
       judulFontSizeAktual = jSize; judulLineHAktual = jLineH; judulLines = jLines; sisaTinggiDesk = sisa; fit = cobaFit;
       if (!cobaFit.truncated || opt === judulSizeOptions.length - 1) break;
