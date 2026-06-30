@@ -941,6 +941,18 @@ function linesToTspansJustified(lines, x, y, lineHeight, widthPx, maxCharsPerLin
   }).join('');
 }
 
+// Saat paragraf tidak muat penuh, potong di akhir KALIMAT terakhir yang masih utuh
+// (diakhiri . ! ?) — bukan di tengah kata dengan tanda "…". Kalau tidak ada batas kalimat
+// sama sekali di dalam batas yang muat, potong di batas kata terakhir (tanpa elipsis aneh).
+function potongSampaiTitik(prefixWords) {
+  const matches = [...prefixWords.matchAll(/[.!?](?=\s|$)/g)];
+  if (matches.length) {
+    const last = matches[matches.length - 1];
+    return prefixWords.slice(0, last.index + 1).trim();
+  }
+  return prefixWords.trim();
+}
+
 // Cari paragraf yang MEMENUHI kotak kartu: coba font terbesar dulu, makin kecil sampai
 // seluruh teks (tanpa terpotong) muat dalam batas lebar & tinggi yang tersedia.
 // Hasilnya: font sebesar mungkin yang masih pas → teks terasa "penuh" sampai batas kotak,
@@ -972,17 +984,31 @@ function fitParagraphToBox(text, widthPx, heightPx, maxFontSize, minFontSize, li
       best = { fontSize, lineHeight, lines, maxCharsPerLine, truncated: false };
       break;
     }
-    // Simpan kandidat fallback (terpotong) seandainya sampai minFontSize pun tetap tidak muat
-    const cut = lines.slice(0, maxLines);
-    const lastIdx = cut.length - 1;
-    if (cut[lastIdx] && cut[lastIdx].length > maxCharsPerLine - 1) {
-      cut[lastIdx] = cut[lastIdx].slice(0, maxCharsPerLine - 1).trim() + '…';
-    } else if (cut[lastIdx]) {
-      cut[lastIdx] = cut[lastIdx].trim() + '…';
+    // Tidak muat penuh: ambil sebanyak maxLines baris (kata-kata utuh, tidak ada yang terpotong
+    // di tengah), lalu rapikan ujungnya supaya berhenti tepat di akhir kalimat (titik/!/?).
+    const prefixWords = lines.slice(0, maxLines).join(' ');
+    const rapi = potongSampaiTitik(prefixWords);
+    const reLines = [];
+    let cur2 = '';
+    for (const w of rapi.split(/\s+/).filter(Boolean)) {
+      const test2 = cur2 ? cur2 + ' ' + w : w;
+      if (test2.length > maxCharsPerLine && cur2) { reLines.push(cur2); cur2 = w; }
+      else cur2 = test2;
     }
-    best = { fontSize, lineHeight, lines: cut, maxCharsPerLine, truncated: true };
+    if (cur2) reLines.push(cur2);
+    // Jaga-jaga: kalau hasil rapikan ternyata masih lebih dari maxLines (jarang terjadi karena
+    // teks sudah dipersingkat), pangkas baris kelebihannya tanpa elipsis.
+    best = { fontSize, lineHeight, lines: reLines.slice(0, maxLines), maxCharsPerLine, truncated: true };
   }
   return best || { fontSize: minFontSize, lineHeight: Math.round(minFontSize * lineHeightRatio), lines: [], maxCharsPerLine: 10, truncated: false };
+}
+
+// Bungkus teks judul (bold) pada ukuran font tertentu — dipakai untuk mencoba beberapa
+// ukuran judul dari besar ke kecil agar deskripsi dapat ruang lebih saat diperlukan.
+function wrapJudulAtSize(text, widthPx, fontSize, maxLines) {
+  const avgCharW = fontSize * 0.66; // bold & besar — pakai faktor konservatif supaya tidak meluber ke kanan
+  const maxChars = Math.max(8, Math.floor(widthPx / avgCharW));
+  return wrapToLines(text, maxChars, maxLines);
 }
 
 async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
@@ -1000,19 +1026,15 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
   const targetKata = items.length >= 3 ? '40-55 kata dalam 1 paragraf utuh' : '55-75 kata dalam 1 paragraf utuh';
   const ringkasanData = await Promise.all(items.map(it => buatRingkasanCarousel(it, targetKata)));
 
-  // Ukuran font & jumlah baris judul menyesuaikan kepadatan slide
+  // Ukuran font & jumlah baris judul menyesuaikan kepadatan slide (ukuran aktual ditentukan
+  // per-kartu lewat loop penyesuaian di bawah, supaya deskripsi bisa diberi ruang lebih).
   const kompak = items.length >= 3;
-  const judulFontSize = kompak ? 23 : 26;
-  const judulLineH = kompak ? 27 : 30;
   const maxJudulLines = kompak ? 3 : 2;
-  const deskFontSize = kompak ? 16 : 18;
-  const deskLineH = kompak ? 19 : 20;
 
   // Lebar teks menyesuaikan ukuran foto (foto lebih besar → teks lebih sempit)
   const fotoX = 56;
   const textX = fotoX + fotoSize + 32;
   const textAvailPx = (W - 40) - textX - 24;
-  const textMaxChars = Math.max(18, Math.round(textAvailPx / (kompak ? 15.5 : 17.5)));
 
   let cardsSvg = '';
   items.forEach((item, i) => {
@@ -1020,35 +1042,45 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
     const foto = fotoData[i];
     const fotoY = y + (cardH - fotoSize) / 2;
 
-    const judulLines = wrapToLines(item.judul || 'Tanpa Judul', textMaxChars, maxJudulLines);
-
     // Konstanta tata letak blok teks — dipakai SAMA PERSIS untuk menghitung jatah tinggi
     // deskripsi maupun tinggi blok akhir, supaya dijamin tidak pernah meluber dari kartu.
     const MARGIN_TOP = 18, MARGIN_BOTTOM = 18, dateH = 26, gapDateJudul = 14, gapJudulDesk = 14;
-    const tinggiTetap = MARGIN_TOP + MARGIN_BOTTOM + dateH + gapDateJudul + judulLines.length * judulLineH + gapJudulDesk;
-    const sisaTinggiDesk = Math.max(0, cardH - tinggiTetap);
 
-    // Cari font terbesar yang membuat paragraf MUAT PENUH (tanpa terpotong) di ruang yang tersisa —
-    // supaya teks mengisi kotak kartu sampai batas bawah, bukan menyisakan ruang kosong.
-    const fit = fitParagraphToBox(
-      ringkasanData[i] || item.deskripsi || '',
-      textAvailPx,
-      sisaTinggiDesk,
-      kompak ? 18 : 20,   // font maksimum dicoba
-      10                  // font minimum sebelum terpaksa dipotong
-    );
+    // Coba beberapa ukuran judul dari BESAR ke KECIL. Untuk tiap ukuran judul, cek apakah
+    // deskripsi muat penuh (tanpa terpotong) di sisa ruang. Pakai judul terbesar yang sudah
+    // bikin deskripsi muat penuh; kalau sampai ukuran judul terkecil pun deskripsi tetap belum
+    // muat semua, tetap pakai ukuran judul terkecil itu (supaya ruang deskripsi paling lega) —
+    // fitParagraphToBox akan memotongnya rapi sampai akhir kalimat, bukan di tengah kata.
+    const judulSizeOptions = kompak ? [23, 21, 19, 17, 16] : [26, 24, 22, 20, 18];
+    let judulFontSizeAktual, judulLineHAktual, judulLines, sisaTinggiDesk, fit;
+    for (let opt = 0; opt < judulSizeOptions.length; opt++) {
+      const jSize = judulSizeOptions[opt];
+      const jLineH = Math.round(jSize * 1.17);
+      const jLines = wrapJudulAtSize(item.judul || 'Tanpa Judul', textAvailPx, jSize, maxJudulLines);
+      const tinggiTetap = MARGIN_TOP + MARGIN_BOTTOM + dateH + gapDateJudul + jLines.length * jLineH + gapJudulDesk;
+      const sisa = Math.max(0, cardH - tinggiTetap);
+      const cobaFit = fitParagraphToBox(
+        ringkasanData[i] || item.deskripsi || '',
+        textAvailPx,
+        sisa,
+        kompak ? 18 : 20,   // font maksimum dicoba untuk deskripsi
+        10                  // font minimum sebelum dipotong sampai akhir kalimat
+      );
+      judulFontSizeAktual = jSize; judulLineHAktual = jLineH; judulLines = jLines; sisaTinggiDesk = sisa; fit = cobaFit;
+      if (!cobaFit.truncated || opt === judulSizeOptions.length - 1) break;
+    }
     const deskLines = fit.lines;
     const deskLineH = fit.lineHeight;
     const deskFontSizeAktual = fit.fontSize;
 
     // Tinggi total blok teks (tanggal + judul + jarak + deskripsi), dipusatkan vertikal dalam kartu.
     // Karena deskLines selalu <= sisaTinggiDesk/deskLineH, blokTinggi dijamin <= cardH - margin atas-bawah.
-    const blokTinggi = dateH + gapDateJudul + judulLines.length * judulLineH + gapJudulDesk + deskLines.length * deskLineH;
+    const blokTinggi = dateH + gapDateJudul + judulLines.length * judulLineHAktual + gapJudulDesk + deskLines.length * deskLineH;
     const blokY = y + (cardH - blokTinggi) / 2;
 
     const tanggalY = blokY + 18;
     const judulY = tanggalY + 14 + 22;
-    const deskY = judulY + (judulLines.length - 1) * judulLineH + 14 + 18;
+    const deskY = judulY + (judulLines.length - 1) * judulLineHAktual + 14 + 18;
 
     cardsSvg += `
     <rect x="40" y="${y}" width="${W - 80}" height="${cardH}" rx="20" fill="rgba(255,255,255,0.12)"/>
@@ -1059,7 +1091,7 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
          <text x="${fotoX + fotoSize/2}" y="${fotoY + fotoSize/2 + 16}" font-size="48" text-anchor="middle">📷</text>`
     }
     <text x="${textX}" y="${tanggalY}" font-family="Nunito, sans-serif" font-size="22" font-weight="800" fill="#f5c842">${escapeXml(item.tanggal || '')}</text>
-    <text font-family="Nunito, sans-serif" font-size="${judulFontSize}" font-weight="800" fill="white">${linesToTspans(judulLines, textX, judulY, judulLineH)}</text>
+    <text font-family="Nunito, sans-serif" font-size="${judulFontSizeAktual}" font-weight="800" fill="white">${linesToTspans(judulLines, textX, judulY, judulLineHAktual)}</text>
     <text font-family="Nunito, sans-serif" font-size="${deskFontSizeAktual}" fill="rgba(255,255,255,0.85)">${linesToTspansJustified(deskLines, textX, deskY, deskLineH, textAvailPx, fit.maxCharsPerLine)}</text>
     `;
   });
