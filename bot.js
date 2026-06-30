@@ -488,6 +488,52 @@ app.get('/api/kegiatan', (req, res) => {
   res.json(data);
 });
 
+// ── Tambah kegiatan manual (kustom) — bisa untuk tanggal/bulan apa saja ──
+app.post('/api/kegiatan', async (req, res) => {
+  try {
+    const { tanggalISO, judul, deskripsi, fotoBase64 } = req.body;
+    if (!judul || !deskripsi) {
+      return res.status(400).json({ error: 'Judul dan deskripsi wajib diisi' });
+    }
+
+    // tanggalISO datang dari <input type="date"> format "YYYY-MM-DD"
+    let tanggalDate = new Date();
+    if (tanggalISO) {
+      const [th, bl, hr] = tanggalISO.split('-').map(Number);
+      if (th && bl && hr) tanggalDate = new Date(th, bl - 1, hr);
+    }
+    const tanggal = formatTanggal(tanggalDate);
+    const timestamp = Math.floor(tanggalDate.getTime() / 1000);
+
+    let driveResult = null;
+    if (fotoBase64) {
+      const matches = fotoBase64.match(/^data:(image\/\w+);base64,(.+)$/);
+      const mimeType = matches ? matches[1] : 'image/jpeg';
+      const base64Data = matches ? matches[2] : fotoBase64;
+      const buffer = Buffer.from(base64Data, 'base64');
+      const ext = mimeType.split('/')[1] || 'jpg';
+      driveResult = await uploadKeDrive(buffer, `kegiatan_${Date.now()}.${ext}`, mimeType);
+    }
+
+    const data = loadData();
+    data.push({
+      id: `${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
+      tanggal,
+      timestamp,
+      judul,
+      deskripsi,
+      foto: driveResult ? driveResult.directUrl : null,
+      fotoDriveId: driveResult ? driveResult.fileId : null,
+      sumber: 'manual',
+    });
+    saveData(data);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('❌ Gagal tambah kegiatan manual:', e.message);
+    res.status(500).json({ error: 'Gagal menambahkan kegiatan' });
+  }
+});
+
 app.delete('/api/kegiatan/:id', async (req, res) => {
   try {
     let data = loadData();
@@ -799,6 +845,7 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
   <h1>📰 E-Magazine</h1>
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
     <input type="text" id="filter-bulan" placeholder="Filter bulan (mis: Juli 2025)" onchange="loadData()">
+    <button class="btn-gen" onclick="openAddModal()">➕ Tambah Kegiatan</button>
     <button class="btn-gen" onclick="window.print()">🖨️ Print / PDF</button>
     <button class="btn-gen" onclick="buatCarousel()">📸 Buat Carousel IG</button>
   </div>
@@ -815,11 +862,25 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
 </div>
 <div class="mag-wrap">
   <div class="cover">
-    <div class="cover-title">MW ON THE MONTH</div>
+    <div class="cover-title">ON THE MONTH</div>
     <div class="cover-month" id="cover-month">—</div>
   </div>
   <div class="timeline" id="timeline"><div class="loading">⏳ Memuat...</div></div>
   <div class="footer-bar">${ORG_NAMA} · ${FOOTER_SOCMED}</div>
+</div>
+<div class="modal-bg" id="add-modal">
+  <div class="modal">
+    <h3>➕ Tambah Kegiatan</h3>
+    <label>Tanggal</label><input type="date" id="add-tanggal">
+    <label>Judul</label><input type="text" id="add-judul" placeholder="Judul kegiatan">
+    <label>Deskripsi</label><textarea id="add-desc" placeholder="Deskripsi kegiatan"></textarea>
+    <label>Foto (opsional)</label><input type="file" id="add-foto" accept="image/*">
+    <div id="add-foto-preview" style="margin:6px 0 12px;"></div>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeAddModal()">Batal</button>
+      <button class="btn-save" id="add-save-btn" onclick="simpanTambah()">💾 Simpan</button>
+    </div>
+  </div>
 </div>
 <div class="modal-bg" id="modal">
   <div class="modal">
@@ -878,6 +939,51 @@ function openLightbox(url) {
   document.getElementById('lightbox').classList.add('open');
 }
 function closeLightbox() { document.getElementById('lightbox').classList.remove('open'); }
+
+let addFotoBase64 = null;
+function openAddModal() {
+  document.getElementById('add-tanggal').value = new Date().toISOString().slice(0,10);
+  document.getElementById('add-judul').value = '';
+  document.getElementById('add-desc').value = '';
+  document.getElementById('add-foto').value = '';
+  document.getElementById('add-foto-preview').innerHTML = '';
+  addFotoBase64 = null;
+  document.getElementById('add-modal').classList.add('open');
+}
+function closeAddModal() { document.getElementById('add-modal').classList.remove('open'); }
+document.getElementById('add-foto').addEventListener('change', function(e) {
+  const file = e.target.files[0];
+  const preview = document.getElementById('add-foto-preview');
+  if (!file) { addFotoBase64 = null; preview.innerHTML = ''; return; }
+  const reader = new FileReader();
+  reader.onload = function() {
+    addFotoBase64 = reader.result;
+    preview.innerHTML = '<img src="' + addFotoBase64 + '" style="max-width:120px;max-height:120px;border-radius:8px;">';
+  };
+  reader.readAsDataURL(file);
+});
+async function simpanTambah() {
+  const tanggalISO = document.getElementById('add-tanggal').value;
+  const judul = document.getElementById('add-judul').value.trim();
+  const deskripsi = document.getElementById('add-desc').value.trim();
+  if (!judul || !deskripsi) { alert('Judul dan deskripsi wajib diisi'); return; }
+  const btn = document.getElementById('add-save-btn');
+  btn.disabled = true; btn.textContent = '⏳ Menyimpan...';
+  try {
+    const r = await fetch('/api/kegiatan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tanggalISO, judul, deskripsi, fotoBase64: addFotoBase64 })
+    });
+    if (!r.ok) throw new Error('gagal');
+    closeAddModal();
+    loadData();
+  } catch (e) {
+    alert('❌ Gagal menyimpan kegiatan');
+  } finally {
+    btn.disabled = false; btn.textContent = '💾 Simpan';
+  }
+}
 
 async function buatCarousel() {
   const bulan = document.getElementById('filter-bulan').value;
