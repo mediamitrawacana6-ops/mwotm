@@ -279,6 +279,18 @@ app.put('/api/kegiatan/:id', (req, res) => {
   } catch { res.status(500).json({ error: 'Gagal update' }); }
 });
 
+// ── Helper: gelapkan warna hex (pengganti color-mix yang tidak universal) ──
+function darkenHex(hex, amount = 0.45) {
+  try {
+    let h = hex.replace('#', '');
+    if (h.length === 3) h = h.split('').map(c => c + c).join('');
+    const r = Math.max(0, Math.round(parseInt(h.slice(0,2),16) * (1 - amount)));
+    const g = Math.max(0, Math.round(parseInt(h.slice(2,4),16) * (1 - amount)));
+    const b = Math.max(0, Math.round(parseInt(h.slice(4,6),16) * (1 - amount)));
+    return `#${r.toString(16).padStart(2,'0')}${g.toString(16).padStart(2,'0')}${b.toString(16).padStart(2,'0')}`;
+  } catch { return '#5a1d38'; }
+}
+
 // ── Halaman utama: E-Magazine Viewer ─────────────────────
 app.get('/', (req, res) => {
   res.send(`<!DOCTYPE html>
@@ -289,9 +301,9 @@ app.get('/', (req, res) => {
 <title>E-Magazine – ${ORG_NAMA}</title>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Fredoka+One&display=swap" rel="stylesheet">
 <style>
-:root { --tc: ${TEMA_WARNA}; --yellow: #f5c842; --dark: #2d1a2e; }
+:root { --tc: ${TEMA_WARNA}; --tc-dark: ${darkenHex(TEMA_WARNA)}; --yellow: #f5c842; --dark: #2d1a2e; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: 'Nunito', sans-serif; background: linear-gradient(160deg, var(--tc) 0%, color-mix(in srgb, var(--tc) 60%, black) 100%); min-height: 100vh; }
+html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160deg, var(--tc) 0%, var(--tc-dark) 100%) fixed; background-color: var(--tc); min-height: 100vh; }
 .topbar { background: rgba(0,0,0,0.2); padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; backdrop-filter: blur(8px); position: sticky; top: 0; z-index: 99; }
 .topbar h1 { font-family: 'Fredoka One', cursive; color: white; font-size: 1.2rem; }
 .topbar input { padding: 7px 12px; border-radius: 8px; border: none; font-family:'Nunito',sans-serif; font-size: 0.88rem; background: rgba(255,255,255,0.15); color: white; outline: none; }
