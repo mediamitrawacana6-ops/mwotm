@@ -61,6 +61,8 @@ async function ambilFotoBelumDipakai(idYangSudahDipakai = []) {
       fields: 'files(id, name, createdTime)',
       orderBy: 'createdTime desc',
       pageSize: 20,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
     });
     const semua = res.data.files || [];
     return semua.filter(f => !idYangSudahDipakai.includes(f.id));
@@ -113,6 +115,7 @@ async function cariFotoUntukKegiatan(teksKegiatan, idYangSudahDipakai = []) {
   await drive.permissions.create({
     fileId: fotoTerpilih.id,
     requestBody: { role: 'reader', type: 'anyone' },
+    supportsAllDrives: true,
   }).catch(() => {});
 
   return {
@@ -139,12 +142,14 @@ async function uploadKeDrive(buffer, filename, mimeType = 'image/jpeg') {
       resource: fileMetadata,
       media,
       fields: 'id, webViewLink, webContentLink',
+      supportsAllDrives: true,
     });
 
     // Buat file bisa diakses publik (read-only) supaya bisa ditampilkan di e-magazine
     await drive.permissions.create({
       fileId: res.data.id,
       requestBody: { role: 'reader', type: 'anyone' },
+      supportsAllDrives: true,
     });
 
     const fileId = res.data.id;
@@ -163,7 +168,7 @@ async function downloadDriveFile(fileId) {
   if (!drive) return null;
   try {
     const res = await drive.files.get(
-      { fileId, alt: 'media' },
+      { fileId, alt: 'media', supportsAllDrives: true },
       { responseType: 'arraybuffer' }
     );
     return Buffer.from(res.data);
@@ -194,7 +199,10 @@ async function cariFileBackupDiDrive(drive) {
   if (backupFileId) return backupFileId;
   const q = `name = '${BACKUP_FILENAME}' and trashed = false` +
     (GDRIVE_FOLDER_ID ? ` and '${GDRIVE_FOLDER_ID}' in parents` : '');
-  const res = await drive.files.list({ q, fields: 'files(id, name)', pageSize: 1 });
+  const res = await drive.files.list({
+    q, fields: 'files(id, name)', pageSize: 1,
+    supportsAllDrives: true, includeItemsFromAllDrives: true,
+  });
   const file = (res.data.files || [])[0];
   backupFileId = file ? file.id : null;
   return backupFileId;
@@ -208,11 +216,17 @@ async function backupDataKeDrive(data) {
 
   const idLama = await cariFileBackupDiDrive(drive);
   if (idLama) {
-    await drive.files.update({ fileId: idLama, media });
+    // Update isi file yang SUDAH ADA (dimiliki akun manusia) — ini tidak butuh kuota dari service account.
+    await drive.files.update({ fileId: idLama, media, supportsAllDrives: true });
   } else {
-    const fileMetadata = { name: BACKUP_FILENAME, parents: GDRIVE_FOLDER_ID ? [GDRIVE_FOLDER_ID] : undefined };
-    const res = await drive.files.create({ resource: fileMetadata, media, fields: 'id' });
-    backupFileId = res.data.id;
+    // Service account TIDAK BISA membuat file baru di "My Drive" pribadi (kuota 0 byte).
+    // Solusi: siapkan file kosong secara manual sekali saja, lalu share Editor ke service account.
+    console.error(
+      `❌ Backup gagal: file "${BACKUP_FILENAME}" belum ada di folder Drive.\n` +
+      `   → Buat 1 file kosong bernama "${BACKUP_FILENAME}" manual di folder Drive kamu (isi cukup "[]"),\n` +
+      `   → lalu share file itu ke email service account dengan akses Editor.\n` +
+      `   → Setelah itu sistem akan otomatis meng-update isinya setiap ada kegiatan baru.`
+    );
   }
 }
 
@@ -237,7 +251,7 @@ async function restoreDataDariDrive() {
       console.log('ℹ️  Belum ada backup di Drive — mulai dari data kosong.');
       return;
     }
-    const res = await drive.files.get({ fileId: idBackup, alt: 'media' }, { responseType: 'text' });
+    const res = await drive.files.get({ fileId: idBackup, alt: 'media', supportsAllDrives: true }, { responseType: 'text' });
     const isi = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
     fs.writeFileSync(DATA_FILE, isi);
     const parsed = JSON.parse(isi);
@@ -468,7 +482,7 @@ app.delete('/api/kegiatan/:id', async (req, res) => {
     const item = data.find(d => d.id === req.params.id);
     if (item?.fotoDriveId) {
       const drive = getDrive();
-      if (drive) await drive.files.delete({ fileId: item.fotoDriveId }).catch(()=>{});
+      if (drive) await drive.files.delete({ fileId: item.fotoDriveId, supportsAllDrives: true }).catch(()=>{});
     }
     data = data.filter(d => d.id !== req.params.id);
     saveData(data);
@@ -510,6 +524,11 @@ app.get('/', (req, res) => {
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&family=Fredoka+One&display=swap" rel="stylesheet">
 <style>
 :root { --tc: ${TEMA_WARNA}; --tc-dark: ${darkenHex(TEMA_WARNA)}; --yellow: #f5c842; --dark: #2d1a2e; }
+* { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
+@media print {
+  html, body { background: linear-gradient(160deg, var(--tc) 0%, var(--tc-dark) 100%) !important; }
+  .topbar, .modal-bg, .lightbox-bg { display: none !important; }
+}
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160deg, var(--tc) 0%, var(--tc-dark) 100%) fixed; background-color: var(--tc); min-height: 100vh; }
 .topbar { background: rgba(0,0,0,0.2); padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; backdrop-filter: blur(8px); position: sticky; top: 0; z-index: 99; }
