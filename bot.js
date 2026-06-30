@@ -35,11 +35,12 @@ function getDrive() {
     const credentials = JSON.parse(GOOGLE_SA_JSON);
     const auth = new google.auth.GoogleAuth({
       credentials,
-      // readonly + file: bisa baca semua file yang sudah di-share ke service account
-      // (termasuk yang diupload manual oleh admin), dan tetap bisa upload file baru.
+      // Scope penuh "drive" diperlukan karena file backup di-share manual oleh admin
+      // (bukan dibuat sendiri oleh service account). Scope "drive.file" yang lebih sempit
+      // hanya mengizinkan akses ke file yang dibuat oleh app itu sendiri, walau status
+      // share-nya sudah "Editor" — makanya backup gagal sebelumnya.
       scopes: [
-        'https://www.googleapis.com/auth/drive.readonly',
-        'https://www.googleapis.com/auth/drive.file',
+        'https://www.googleapis.com/auth/drive',
       ],
     });
     driveClient = google.drive({ version: 'v3', auth });
