@@ -927,14 +927,15 @@ function linesToTspans(lines, x, y, lineHeight) {
   return lines.map((line, i) => `<tspan x="${x}" y="${y + i * lineHeight}">${escapeXml(line)}</tspan>`).join('');
 }
 
-// Sama seperti linesToTspans, tapi tiap baris (kecuali baris terakhir) "dipaksa" merentang
-// penuh sampai lebar kotak (textLength + lengthAdjust) supaya hasilnya rata kiri-kanan (justified),
-// meniru tampilan paragraf rapi di halaman web (mwotm.mitrawacana.or.id).
-function linesToTspansJustified(lines, x, y, lineHeight, widthPx) {
+// Sama seperti linesToTspans, tapi tiap baris yang sudah cukup "penuh" (kecuali baris terakhir)
+// direntangkan pas selebar kotak (textLength + lengthAdjust) supaya hasilnya rata kiri-kanan (justified),
+// meniru tampilan paragraf rapi di halaman web (mwotm.mitrawacana.or.id). Baris yang masih jauh dari
+// penuh (mis. sisa 1-2 kata pendek) TIDAK dipaksa rata supaya tidak terlihat "merenggang" tidak wajar.
+function linesToTspansJustified(lines, x, y, lineHeight, widthPx, maxCharsPerLine) {
   return lines.map((line, i) => {
     const isLast = i === lines.length - 1;
-    // Baris terakhir & baris yang cuma 1 kata tidak dipaksa rata (supaya tidak merenggang aneh)
-    const bolehJustify = !isLast && line.trim().includes(' ');
+    const cukupPenuh = maxCharsPerLine ? (line.length / maxCharsPerLine) >= 0.62 : true;
+    const bolehJustify = !isLast && line.trim().includes(' ') && cukupPenuh;
     const attrs = bolehJustify ? ` textLength="${widthPx}" lengthAdjust="spacingAndGlyphs"` : '';
     return `<tspan x="${x}" y="${y + i * lineHeight}"${attrs}>${escapeXml(line)}</tspan>`;
   }).join('');
@@ -944,11 +945,14 @@ function linesToTspansJustified(lines, x, y, lineHeight, widthPx) {
 // seluruh teks (tanpa terpotong) muat dalam batas lebar & tinggi yang tersedia.
 // Hasilnya: font sebesar mungkin yang masih pas → teks terasa "penuh" sampai batas kotak,
 // bukan cuma 1-2 baris pendek yang menyisakan ruang kosong di bawah.
-function fitParagraphToBox(text, widthPx, heightPx, maxFontSize, minFontSize, lineHeightRatio = 1.28) {
+// PENTING: dipakai garis aman (safety factor) pada estimasi lebar karakter supaya teks TIDAK PERNAH
+// melebihi batas kartu — lebih baik baris dihitung sedikit lebih pendek dari kapasitas asli
+// (sehingga stretch justify-nya kecil & rapi) daripada under-estimate dan akhirnya kepotong/meluber.
+function fitParagraphToBox(text, widthPx, heightPx, maxFontSize, minFontSize, lineHeightRatio = 1.3) {
   const words = String(text || '').split(/\s+/).filter(Boolean);
   let best = null;
   for (let fontSize = maxFontSize; fontSize >= minFontSize; fontSize -= 0.5) {
-    const avgCharW = fontSize * 0.52; // estimasi lebar rata-rata karakter untuk Nunito
+    const avgCharW = fontSize * 0.56; // estimasi lebar rata-rata karakter (sengaja agak lebar/konservatif)
     const maxCharsPerLine = Math.max(8, Math.floor(widthPx / avgCharW));
     const lineHeight = Math.round(fontSize * lineHeightRatio);
     const maxLines = Math.max(1, Math.floor(heightPx / lineHeight));
@@ -1018,24 +1022,29 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
 
     const judulLines = wrapToLines(item.judul || 'Tanpa Judul', textMaxChars, maxJudulLines);
 
-    // Sisa tinggi kartu yang tersedia untuk paragraf deskripsi (setelah tanggal + judul + margin atas/bawah)
-    const sisaTinggiDesk = cardH - 40 - 26 - judulLines.length * judulLineH - 24;
+    // Konstanta tata letak blok teks — dipakai SAMA PERSIS untuk menghitung jatah tinggi
+    // deskripsi maupun tinggi blok akhir, supaya dijamin tidak pernah meluber dari kartu.
+    const MARGIN_TOP = 18, MARGIN_BOTTOM = 18, dateH = 26, gapDateJudul = 14, gapJudulDesk = 14;
+    const tinggiTetap = MARGIN_TOP + MARGIN_BOTTOM + dateH + gapDateJudul + judulLines.length * judulLineH + gapJudulDesk;
+    const sisaTinggiDesk = Math.max(0, cardH - tinggiTetap);
+
     // Cari font terbesar yang membuat paragraf MUAT PENUH (tanpa terpotong) di ruang yang tersisa —
     // supaya teks mengisi kotak kartu sampai batas bawah, bukan menyisakan ruang kosong.
     const fit = fitParagraphToBox(
       ringkasanData[i] || item.deskripsi || '',
       textAvailPx,
-      Math.max(deskFontSize * 1.28, sisaTinggiDesk),
+      sisaTinggiDesk,
       kompak ? 18 : 20,   // font maksimum dicoba
-      11                  // font minimum sebelum terpaksa dipotong
+      10                  // font minimum sebelum terpaksa dipotong
     );
     const deskLines = fit.lines;
     const deskLineH = fit.lineHeight;
     const deskFontSizeAktual = fit.fontSize;
 
-    // Tinggi total blok teks (tanggal + judul + jarak + deskripsi), untuk dipusatkan vertikal dalam kartu
-    const blokTinggi = 26 + 14 + judulLines.length * judulLineH + 14 + deskLines.length * deskLineH;
-    const blokY = y + Math.max(20, (cardH - blokTinggi) / 2);
+    // Tinggi total blok teks (tanggal + judul + jarak + deskripsi), dipusatkan vertikal dalam kartu.
+    // Karena deskLines selalu <= sisaTinggiDesk/deskLineH, blokTinggi dijamin <= cardH - margin atas-bawah.
+    const blokTinggi = dateH + gapDateJudul + judulLines.length * judulLineH + gapJudulDesk + deskLines.length * deskLineH;
+    const blokY = y + (cardH - blokTinggi) / 2;
 
     const tanggalY = blokY + 18;
     const judulY = tanggalY + 14 + 22;
@@ -1051,7 +1060,7 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
     }
     <text x="${textX}" y="${tanggalY}" font-family="Nunito, sans-serif" font-size="22" font-weight="800" fill="#f5c842">${escapeXml(item.tanggal || '')}</text>
     <text font-family="Nunito, sans-serif" font-size="${judulFontSize}" font-weight="800" fill="white">${linesToTspans(judulLines, textX, judulY, judulLineH)}</text>
-    <text font-family="Nunito, sans-serif" font-size="${deskFontSizeAktual}" fill="rgba(255,255,255,0.85)">${linesToTspansJustified(deskLines, textX, deskY, deskLineH, textAvailPx)}</text>
+    <text font-family="Nunito, sans-serif" font-size="${deskFontSizeAktual}" fill="rgba(255,255,255,0.85)">${linesToTspansJustified(deskLines, textX, deskY, deskLineH, textAvailPx, fit.maxCharsPerLine)}</text>
     `;
   });
 
@@ -1073,7 +1082,7 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
       </linearGradient>
     </defs>
     <rect width="${W}" height="${H}" fill="url(#bg)"/>
-    <text x="56" y="90" font-family="Nunito, sans-serif" font-size="30" font-weight="900" fill="white" letter-spacing="2">ON THE MONTH</text>
+    <text x="56" y="90" font-family="Nunito, sans-serif" font-size="30" font-weight="900" fill="white" letter-spacing="2">MW ON THE MONTH</text>
     <rect x="56" y="108" width="64" height="8" rx="4" fill="#f5c842"/>
     <text x="56" y="190" font-family="Nunito, sans-serif" font-size="64" font-weight="900" fill="#f5c842">${escapeXml(bulanLabel.toUpperCase())}</text>
     ${logoSvg}
@@ -1200,7 +1209,7 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
 <div class="mag-wrap">
   <div class="cover">
     <img src="${LOGO_URL_PUBLIK}" alt="${ORG_NAMA}" class="cover-logo">
-    <div class="cover-title">ON THE MONTH</div>
+    <div class="cover-title">MW ON THE MONTH</div>
     <div class="cover-month" id="cover-month">—</div>
   </div>
   <div class="timeline" id="timeline"><div class="loading">⏳ Memuat...</div></div>
