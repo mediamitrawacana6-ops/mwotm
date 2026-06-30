@@ -1296,7 +1296,7 @@ async function hapus(id) {
   loadData();
 }
 loadData();
-setInterval(loadData, 30000);
+setInterval(loadData, 60000);
 </script>
 </body>
 </html>`);
