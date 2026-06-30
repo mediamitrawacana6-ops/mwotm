@@ -181,6 +181,70 @@ function loadData() {
 }
 function saveData(data) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+  backupDataKeDrive(data).catch(e => console.error('❌ Gagal backup data ke Drive:', e.message));
+}
+
+// ── Backup & restore kegiatan.json ke/dari Google Drive ────
+// Render free/standard web service punya disk sementara (hilang tiap redeploy/restart).
+// Supaya data tidak hilang, kita simpan salinan kegiatan.json di Google Drive juga.
+const BACKUP_FILENAME = 'kegiatan_backup.json';
+let backupFileId = null; // cache id file backup di Drive, biar tidak perlu cari ulang tiap kali
+
+async function cariFileBackupDiDrive(drive) {
+  if (backupFileId) return backupFileId;
+  const q = `name = '${BACKUP_FILENAME}' and trashed = false` +
+    (GDRIVE_FOLDER_ID ? ` and '${GDRIVE_FOLDER_ID}' in parents` : '');
+  const res = await drive.files.list({ q, fields: 'files(id, name)', pageSize: 1 });
+  const file = (res.data.files || [])[0];
+  backupFileId = file ? file.id : null;
+  return backupFileId;
+}
+
+async function backupDataKeDrive(data) {
+  const drive = getDrive();
+  if (!drive) return; // tidak ada koneksi Drive, lewati saja
+  const isi = JSON.stringify(data, null, 2);
+  const media = { mimeType: 'application/json', body: require('stream').Readable.from(isi) };
+
+  const idLama = await cariFileBackupDiDrive(drive);
+  if (idLama) {
+    await drive.files.update({ fileId: idLama, media });
+  } else {
+    const fileMetadata = { name: BACKUP_FILENAME, parents: GDRIVE_FOLDER_ID ? [GDRIVE_FOLDER_ID] : undefined };
+    const res = await drive.files.create({ resource: fileMetadata, media, fields: 'id' });
+    backupFileId = res.data.id;
+  }
+}
+
+async function restoreDataDariDrive() {
+  // Kalau file lokal sudah ada isinya, tidak perlu restore (hindari menimpa data yang baru saja ditulis).
+  if (fs.existsSync(DATA_FILE)) {
+    try {
+      const isi = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+      if (Array.isArray(isi) && isi.length > 0) {
+        console.log(`ℹ️  Data lokal sudah ada (${isi.length} kegiatan), lewati restore dari Drive.`);
+        return;
+      }
+    } catch {}
+  }
+
+  const drive = getDrive();
+  if (!drive) return;
+
+  try {
+    const idBackup = await cariFileBackupDiDrive(drive);
+    if (!idBackup) {
+      console.log('ℹ️  Belum ada backup di Drive — mulai dari data kosong.');
+      return;
+    }
+    const res = await drive.files.get({ fileId: idBackup, alt: 'media' }, { responseType: 'text' });
+    const isi = typeof res.data === 'string' ? res.data : JSON.stringify(res.data);
+    fs.writeFileSync(DATA_FILE, isi);
+    const parsed = JSON.parse(isi);
+    console.log(`✅ Data berhasil dipulihkan dari Drive (${Array.isArray(parsed) ? parsed.length : 0} kegiatan).`);
+  } catch (e) {
+    console.error('❌ Gagal restore data dari Drive:', e.message);
+  }
 }
 
 // ── Format tanggal Indonesia ───────────────────────────────
@@ -584,7 +648,9 @@ setInterval(loadData, 30000);
 </html>`);
 });
 
-app.listen(PORT, () => {
-  console.log(`🌐 Server aktif di port ${PORT}`);
-  console.log(`📲 Webhook URL untuk Fonnte: https://<domain-kamu>/webhook/fonnte`);
+restoreDataDariDrive().finally(() => {
+  app.listen(PORT, () => {
+    console.log(`🌐 Server aktif di port ${PORT}`);
+    console.log(`📲 Webhook URL untuk Fonnte: https://<domain-kamu>/webhook/fonnte`);
+  });
 });
