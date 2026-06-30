@@ -892,7 +892,7 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
 <div class="mag-wrap">
   <div class="cover">
     <img src="${LOGO_URL_PUBLIK}" alt="${ORG_NAMA}" class="cover-logo">
-    <div class="cover-title">MW ON THE MONTH</div>
+    <div class="cover-title">ON THE MONTH</div>
     <div class="cover-month" id="cover-month">—</div>
   </div>
   <div class="timeline" id="timeline"><div class="loading">⏳ Memuat...</div></div>
