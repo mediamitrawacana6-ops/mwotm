@@ -463,8 +463,9 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
 .bubble .day { font-family:'Fredoka One',cursive; font-size:1.5rem; color:var(--dark); line-height:1; }
 .bubble .myr { font-size:0.55rem; font-weight:700; color:var(--dark); opacity:.75; text-transform:uppercase; text-align:center; }
 .card { flex:1; background:rgba(255,255,255,0.18); backdrop-filter:blur(6px); border-radius:16px; padding:14px; display:flex; gap:12px; align-items:flex-start; border:1px solid rgba(255,255,255,0.3); }
-.card img { width:100px; height:100px; border-radius:10px; object-fit:cover; flex-shrink:0; }
-.card-nofoto { width:100px; height:100px; border-radius:10px; background:rgba(255,255,255,0.2); flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:2rem; border:2px dashed rgba(255,255,255,0.4); }
+.card img { width:160px; height:160px; border-radius:10px; object-fit:cover; flex-shrink:0; cursor:pointer; transition:opacity .2s; }
+.card img:hover { opacity:0.85; }
+.card-nofoto { width:160px; height:160px; border-radius:10px; background:rgba(255,255,255,0.2); flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:2rem; border:2px dashed rgba(255,255,255,0.4); }
 .card-body { flex:1; }
 .card-judul { font-weight:900; font-size:0.95rem; color:var(--yellow); margin-bottom:6px; }
 .card-desc { font-size:0.82rem; color:rgba(255,255,255,0.9); line-height:1.6; }
@@ -484,7 +485,11 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
 .modal-btns { display:flex; gap:10px; justify-content:flex-end; }
 .btn-save { padding:9px 20px; background:var(--tc); color:white; border:none; border-radius:8px; font-weight:800; cursor:pointer; }
 .btn-cancel { padding:9px 16px; background:#eee; color:#333; border:none; border-radius:8px; font-weight:800; cursor:pointer; }
-@media(max-width:520px){ .card { flex-direction:column; } .card img, .card-nofoto { width:100%; height:150px; } }
+@media(max-width:520px){ .card { flex-direction:column; } .card img, .card-nofoto { width:100%; height:200px; } }
+.lightbox-bg { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:300; align-items:center; justify-content:center; padding:20px; cursor:zoom-out; }
+.lightbox-bg.open { display:flex; }
+.lightbox-bg img { max-width:100%; max-height:90vh; border-radius:10px; box-shadow:0 10px 40px rgba(0,0,0,0.5); }
+.lightbox-close { position:absolute; top:18px; right:24px; color:white; font-size:2rem; cursor:pointer; line-height:1; background:rgba(255,255,255,0.15); width:40px; height:40px; border-radius:50%; display:flex; align-items:center; justify-content:center; }
 </style>
 </head>
 <body>
@@ -497,7 +502,7 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
 </div>
 <div class="mag-wrap">
   <div class="cover">
-    <div class="cover-title">ON THE MONTH</div>
+    <div class="cover-title">MW ON THE MONTH</div>
     <div class="cover-month" id="cover-month">—</div>
   </div>
   <div class="timeline" id="timeline"><div class="loading">⏳ Memuat...</div></div>
@@ -514,6 +519,10 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
       <button class="btn-save" onclick="saveEdit()">💾 Simpan</button>
     </div>
   </div>
+</div>
+<div class="lightbox-bg" id="lightbox" onclick="closeLightbox()">
+  <div class="lightbox-close" onclick="closeLightbox()">✕</div>
+  <img id="lightbox-img" src="" alt="Foto kegiatan">
 </div>
 <script>
 let allData = [];
@@ -537,7 +546,8 @@ function renderTimeline() {
     const dayMatch = item.tanggal?.match(/^(\\d+)/);
     const day = dayMatch ? dayMatch[1] : '?';
     const monthYr = item.tanggal?.replace(/^\\d+\\s*/, '') || '';
-    const fotoHTML = item.foto ? '<img src="'+item.foto+'" loading="lazy" onerror="this.outerHTML=\\'<div class=&quot;card-nofoto&quot;>📷</div>\\'">' : '<div class="card-nofoto">📷</div>';
+    const fotoUrl = (item.foto || '').replace(/'/g, '&#39;');
+    const fotoHTML = item.foto ? '<img src="'+fotoUrl+'" loading="lazy" onclick="openLightbox(\\''+fotoUrl+'\\')" onerror="this.outerHTML=\\'<div class=&quot;card-nofoto&quot;>📷</div>\\'">' : '<div class="card-nofoto">📷</div>';
     return '<div class="tl-item"><div class="bubble"><span class="day">'+day+'</span><span class="myr">'+monthYr+'</span></div><div class="card">'+fotoHTML+'<div class="card-body"><div class="card-judul">"'+(item.judul||'Tanpa Judul')+'"</div><div class="card-desc">'+(item.deskripsi||'')+'</div><div class="card-actions"><button class="btn-edit" onclick="openEdit(\\''+item.id+'\\')">✏️ Edit</button><button class="btn-del" onclick="hapus(\\''+item.id+'\\')">🗑️ Hapus</button></div></div></div></div>';
   }).join('');
 }
@@ -550,6 +560,11 @@ function openEdit(id) {
   document.getElementById('modal').classList.add('open');
 }
 function closeModal() { document.getElementById('modal').classList.remove('open'); }
+function openLightbox(url) {
+  document.getElementById('lightbox-img').src = url;
+  document.getElementById('lightbox').classList.add('open');
+}
+function closeLightbox() { document.getElementById('lightbox').classList.remove('open'); }
 async function saveEdit() {
   const id = document.getElementById('edit-id').value;
   const judul = document.getElementById('edit-judul').value;
