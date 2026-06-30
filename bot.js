@@ -28,14 +28,19 @@ let driveClient = null;
 function getDrive() {
   if (driveClient) return driveClient;
   if (!GOOGLE_SA_JSON) {
-    console.warn('⚠️  GOOGLE_SERVICE_ACCOUNT_JSON belum diisi — foto tidak akan diupload ke Drive.');
+    console.warn('⚠️  GOOGLE_SERVICE_ACCOUNT_JSON belum diisi — fitur foto tidak akan berfungsi.');
     return null;
   }
   try {
     const credentials = JSON.parse(GOOGLE_SA_JSON);
     const auth = new google.auth.GoogleAuth({
       credentials,
-      scopes: ['https://www.googleapis.com/auth/drive.file'],
+      // readonly + file: bisa baca semua file yang sudah di-share ke service account
+      // (termasuk yang diupload manual oleh admin), dan tetap bisa upload file baru.
+      scopes: [
+        'https://www.googleapis.com/auth/drive.readonly',
+        'https://www.googleapis.com/auth/drive.file',
+      ],
     });
     driveClient = google.drive({ version: 'v3', auth });
     return driveClient;
@@ -43,6 +48,78 @@ function getDrive() {
     console.error('❌ Gagal parse GOOGLE_SERVICE_ACCOUNT_JSON:', e.message);
     return null;
   }
+}
+
+// ── Ambil daftar foto di folder Drive yang belum dipakai ──
+async function ambilFotoBelumDipakai(idYangSudahDipakai = []) {
+  const drive = getDrive();
+  if (!drive || !GDRIVE_FOLDER_ID) return [];
+
+  try {
+    const res = await drive.files.list({
+      q: `'${GDRIVE_FOLDER_ID}' in parents and trashed = false and mimeType contains 'image/'`,
+      fields: 'files(id, name, createdTime)',
+      orderBy: 'createdTime desc',
+      pageSize: 20,
+    });
+    const semua = res.data.files || [];
+    return semua.filter(f => !idYangSudahDipakai.includes(f.id));
+  } catch (e) {
+    console.error('❌ Gagal ambil daftar foto Drive:', e.message);
+    return [];
+  }
+}
+
+// ── AI: cocokkan teks kegiatan dengan foto yang paling relevan ──
+async function cocokkanFotoDenganAI(teksKegiatan, daftarFoto) {
+  if (!daftarFoto.length) return null;
+  if (!ANTHROPIC_KEY) return daftarFoto[0]; // fallback: ambil yang terbaru
+
+  try {
+    const client = new Anthropic({ apiKey: ANTHROPIC_KEY });
+    const daftarStr = daftarFoto
+      .map((f, i) => `${i+1}. nama file: "${f.name}", diupload: ${f.createdTime}`)
+      .join('\n');
+
+    const resp = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 20,
+      messages: [{
+        role: 'user',
+        content: `Ada teks laporan kegiatan: "${teksKegiatan.slice(0,300)}"\n\nBerikut daftar foto yang tersedia di folder Drive (belum terpakai):\n${daftarStr}\n\nMana NOMOR foto yang paling cocok dengan kegiatan di atas, berdasarkan kemiripan nama file dengan isi teks? Jika tidak ada yang relevan sama sekali, jawab "0". Jawab HANYA dengan angka saja, tanpa penjelasan.`
+      }]
+    });
+    const jawaban = resp.content[0].text.trim();
+    const idx = parseInt(jawaban, 10);
+    if (!idx || idx < 1 || idx > daftarFoto.length) return null;
+    return daftarFoto[idx - 1];
+  } catch (e) {
+    console.error('❌ Gagal cocokkan foto dengan AI:', e.message);
+    return null;
+  }
+}
+
+// ── Cari & siapkan foto yang cocok untuk kegiatan, set permission publik ──
+async function cariFotoUntukKegiatan(teksKegiatan, idYangSudahDipakai = []) {
+  const drive = getDrive();
+  if (!drive) return null;
+
+  const daftarFoto = await ambilFotoBelumDipakai(idYangSudahDipakai);
+  if (!daftarFoto.length) return null;
+
+  const fotoTerpilih = await cocokkanFotoDenganAI(teksKegiatan, daftarFoto);
+  if (!fotoTerpilih) return null;
+
+  await drive.permissions.create({
+    fileId: fotoTerpilih.id,
+    requestBody: { role: 'reader', type: 'anyone' },
+  }).catch(() => {});
+
+  return {
+    fileId: fotoTerpilih.id,
+    fileName: fotoTerpilih.name,
+    directUrl: `https://drive.google.com/uc?export=view&id=${fotoTerpilih.id}`,
+  };
 }
 
 async function uploadKeDrive(buffer, filename, mimeType = 'image/jpeg') {
@@ -76,6 +153,22 @@ async function uploadKeDrive(buffer, filename, mimeType = 'image/jpeg') {
     return { fileId, directUrl, viewLink: res.data.webViewLink };
   } catch (e) {
     console.error('❌ Gagal upload ke Drive:', e.message);
+    return null;
+  }
+}
+
+// ── Download isi file dari Drive sebagai buffer ───────────
+async function downloadDriveFile(fileId) {
+  const drive = getDrive();
+  if (!drive) return null;
+  try {
+    const res = await drive.files.get(
+      { fileId, alt: 'media' },
+      { responseType: 'arraybuffer' }
+    );
+    return Buffer.from(res.data);
+  } catch (e) {
+    console.error('❌ Gagal download isi file dari Drive:', e.message);
     return null;
   }
 }
@@ -132,12 +225,32 @@ async function ekstrakJudul(teks) {
       max_tokens: 80,
       messages: [{
         role: 'user',
-        content: `Dari teks kegiatan berikut, buat judul singkat maksimal 10 kata (tanpa tanda kutip, tanpa penjelasan tambahan):\n"${teks.slice(0,300)}"`
+        content: `Dari teks kegiatan berikut, buat judul singkat maksimal 10 kata yang menangkap inti kegiatan (tanpa tanda kutip, tanpa penjelasan tambahan, tanpa kata "Kegiatan" di awal kecuali memang perlu):\n"${teks.slice(0,400)}"`
       }]
     });
     return resp.content[0].text.trim().replace(/^["']|["']$/g,'');
   } catch {
     return teks.slice(0, 60);
+  }
+}
+
+// ── AI: rapikan teks mentah jadi deskripsi 1 paragraf ─────
+async function rapikanDeskripsi(teksMentah) {
+  if (!ANTHROPIC_KEY) return teksMentah;
+  try {
+    const client = new Anthropic({ apiKey: ANTHROPIC_KEY });
+    const resp = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 300,
+      messages: [{
+        role: 'user',
+        content: `Rapikan teks kegiatan organisasi berikut menjadi 1 paragraf deskripsi (3-4 kalimat) Bahasa Indonesia yang profesional dan jelas. Pertahankan semua fakta penting (siapa, apa, kapan, di mana, tujuan) — jangan menambah informasi baru yang tidak ada di teks asli. Langsung tulis paragrafnya saja tanpa kata pengantar:\n\n"${teksMentah.slice(0,500)}"`
+      }]
+    });
+    return resp.content[0].text.trim();
+  } catch (e) {
+    console.error('AI rapikan error:', e.message);
+    return teksMentah;
   }
 }
 
@@ -182,12 +295,20 @@ app.post('/webhook/fonnte', async (req, res) => {
       return;
     }
 
+    // Fonnte mengirim field attachment (url, filename, extension) HANYA jika
+    // device memakai paket berbayar yang mendukung attachment.
+    // Paket gratis/trial TIDAK akan pernah mengisi field ini.
     const sender    = body.sender || body.from || '';
-    const pesanTeks = body.message || body.text || '';
-    const mediaUrl  = body.url || body.image || body.file || '';
+    const pesanTeks = body.message || '';
+    const mediaUrl  = body.url || '';
     const tanggal   = formatTanggal(new Date());
 
-    // ── Pesan dengan FOTO ──
+    if (!mediaUrl && !pesanTeks) {
+      console.log('   (dilewati — tidak ada teks maupun media di payload)');
+      return;
+    }
+
+    // ── Pesan dengan FOTO langsung (hanya jika paket Fonnte mendukung) ──
     if (mediaUrl) {
       console.log(`📸 Foto masuk dari grup, tanggal ${tanggal}...`);
       const buffer = await downloadMediaFonnte(mediaUrl);
@@ -195,9 +316,8 @@ app.post('/webhook/fonnte', async (req, res) => {
 
       const imageBase64 = buffer.toString('base64');
       const deskripsi    = await buatDeskripsi(imageBase64, pesanTeks);
-      const judul        = pesanTeks ? await ekstrakJudul(pesanTeks) : await ekstrakJudul(deskripsi);
+      const judul        = await ekstrakJudul(deskripsi);
 
-      // Upload ke Google Drive
       const filename = `kegiatan_${Date.now()}.jpg`;
       const driveResult = await uploadKeDrive(buffer, filename);
 
@@ -218,11 +338,30 @@ app.post('/webhook/fonnte', async (req, res) => {
       console.log(`   ✅ Disimpan: "${judul}"`);
     }
 
-    // ── Pesan TEKS dengan hashtag ──
+    // ── Pesan TEKS dengan hashtag — AI cari foto paling relevan dari Drive ──
     else if (pesanTeks && (pesanTeks.toLowerCase().includes('#kegiatan') || pesanTeks.toLowerCase().includes('#rekap'))) {
       console.log(`📝 Teks kegiatan masuk, tanggal ${tanggal}...`);
+
       const bersih = pesanTeks.replace(/#kegiatan|#rekap/gi, '').trim();
-      const judul  = await ekstrakJudul(bersih);
+
+      // Cari foto yang paling relevan dari folder Drive (yang belum dipakai)
+      const idFotoTerpakai = loadData()
+        .map(d => d.fotoDriveId)
+        .filter(Boolean);
+      const fotoCocok = await cariFotoUntukKegiatan(bersih, idFotoTerpakai);
+
+      let deskripsi;
+      if (fotoCocok) {
+        console.log(`   🖼️ Foto cocok ditemukan: "${fotoCocok.fileName}"`);
+        const fotoBuffer = await downloadDriveFile(fotoCocok.fileId);
+        deskripsi = fotoBuffer
+          ? await buatDeskripsi(fotoBuffer.toString('base64'), bersih)
+          : await rapikanDeskripsi(bersih);
+      } else {
+        console.log('   ℹ️ Tidak ada foto yang cocok ditemukan di Drive.');
+        deskripsi = await rapikanDeskripsi(bersih);
+      }
+      const judul = await ekstrakJudul(deskripsi);
 
       const data = loadData();
       data.push({
@@ -230,14 +369,19 @@ app.post('/webhook/fonnte', async (req, res) => {
         tanggal,
         timestamp: Math.floor(Date.now()/1000),
         judul,
-        deskripsi: bersih,
-        foto: null,
+        deskripsi,
+        foto: fotoCocok ? fotoCocok.directUrl : null,
+        fotoDriveId: fotoCocok ? fotoCocok.fileId : null,
         sumber: 'wa_teks',
       });
       saveData(data);
 
-      await kirimBalasanWA(sender, `✅ Kegiatan "${judul}" (${tanggal}) berhasil dicatat!`);
-      console.log(`   ✅ Disimpan: "${judul}"`);
+      let balasan = `✅ Kegiatan "${judul}" (${tanggal}) berhasil dicatat!`;
+      balasan += fotoCocok
+        ? `\n📷 Foto otomatis dipasangkan dari folder Drive.`
+        : `\n📷 Belum ada foto yang cocok — upload foto ke folder Drive lalu kirim ulang kegiatannya jika perlu.`;
+      await kirimBalasanWA(sender, balasan);
+      console.log(`   ✅ Disimpan: "${judul}"${fotoCocok ? ' (dengan foto)' : ''}`);
     }
 
   } catch (err) {
