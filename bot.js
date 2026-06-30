@@ -869,11 +869,37 @@ async function ambilFotoBase64(item) {
       if (buf) return `data:image/jpeg;base64,${buf.toString('base64')}`;
     }
     if (item.foto) {
-      const res = await axios.get(item.foto, { responseType: 'arraybuffer', timeout: 10000 });
-      return `data:image/jpeg;base64,${Buffer.from(res.data).toString('base64')}`;
+      const res = await axios.get(item.foto, { responseType: 'arraybuffer', timeout: 15000 });
+      // Pakai content-type asli dari response, jangan dipaksa jpeg — kalau formatnya
+      // sebenarnya PNG/WebP tapi dideklarasikan jpeg, sebagian renderer SVG gagal
+      // mendekode dan gambarnya jadi hilang total dari slide.
+      let mimeType = (res.headers['content-type'] || '').split(';')[0].trim();
+      if (!mimeType || !mimeType.startsWith('image/')) mimeType = 'image/jpeg';
+      return `data:${mimeType};base64,${Buffer.from(res.data).toString('base64')}`;
     }
   } catch (e) { console.error('⚠️  Gagal ambil foto untuk carousel:', e.message); }
   return null;
+}
+
+// ── AI: ringkasan khusus carousel — padat tapi mencakup 5W+1H ─────────────
+async function buatRingkasanCarousel(item) {
+  const teksAsli = item.deskripsi || item.judul || '';
+  if (!ANTHROPIC_KEY) return teksAsli;
+  try {
+    const client = new Anthropic({ apiKey: ANTHROPIC_KEY });
+    const resp = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 220,
+      messages: [{
+        role: 'user',
+        content: `Buat ringkasan kegiatan untuk slide carousel Instagram, maksimal 3 kalimat pendek, Bahasa Indonesia. Pastikan mencakup unsur 5W+1H sejauh tersedia di teks asli (siapa yang terlibat, apa kegiatannya, kapan ${item.tanggal ? `— gunakan tanggal "${item.tanggal}" jika teks asli tidak menyebutkan tanggal eksplisit` : ''}, di mana, mengapa/tujuannya, bagaimana pelaksanaannya). Jangan menambah fakta yang tidak ada di teks asli. Langsung tulis ringkasannya saja tanpa kata pengantar atau label:\n\nJudul: "${item.judul || ''}"\nTeks asli: "${teksAsli.slice(0, 600)}"`
+      }]
+    });
+    return resp.content[0].text.trim();
+  } catch (e) {
+    console.error('⚠️  Gagal buat ringkasan carousel:', e.message);
+    return teksAsli;
+  }
 }
 
 // Pecah teks jadi array baris (estimasi karakter) — dipakai untuk hitung tinggi konten sebelum digambar
@@ -909,6 +935,7 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
   const fotoSize = Math.min(cardH - 24, 420);
 
   const fotoData = await Promise.all(items.map(ambilFotoBase64));
+  const ringkasanData = await Promise.all(items.map(buatRingkasanCarousel));
 
   // Lebar teks menyesuaikan ukuran foto (foto lebih besar → teks lebih sempit)
   const fotoX = 56;
@@ -925,9 +952,9 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
     const judulLines = wrapToLines(item.judul || 'Tanpa Judul', textMaxChars, 2);
     const judulLineH = 30;
     // Deskripsi bisa beberapa baris, dibatasi oleh tinggi kartu yang tersedia
-    const maxDeskLines = Math.max(2, Math.min(6, Math.floor((cardH - 40 - 26 - judulLines.length * judulLineH - 24) / 22)));
-    const deskLines = wrapToLines(item.deskripsi || '', textMaxChars, maxDeskLines);
-    const deskLineH = 22;
+    const maxDeskLines = Math.max(3, Math.min(9, Math.floor((cardH - 40 - 26 - judulLines.length * judulLineH - 24) / 20)));
+    const deskLines = wrapToLines(ringkasanData[i] || item.deskripsi || '', textMaxChars, maxDeskLines);
+    const deskLineH = 20;
 
     // Tinggi total blok teks (tanggal + judul + jarak + deskripsi), untuk dipusatkan vertikal dalam kartu
     const blokTinggi = 26 + 14 + judulLines.length * judulLineH + 14 + deskLines.length * deskLineH;
@@ -976,7 +1003,8 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
     ${totalSlide > 1 && !LOGO_BASE64 ? `<text x="${W - 56}" y="90" font-family="Nunito, sans-serif" font-size="26" font-weight="800" fill="rgba(255,255,255,0.7)" text-anchor="end">${slideKe}/${totalSlide}</text>` : ''}
     ${totalSlide > 1 && LOGO_BASE64 ? `<text x="${W - 56}" y="${logoY + logoH + 26}" font-family="Nunito, sans-serif" font-size="22" font-weight="800" fill="rgba(255,255,255,0.7)" text-anchor="end">${slideKe}/${totalSlide}</text>` : ''}
     ${cardsSvg}
-    <text x="${W/2}" y="${H - 36}" font-family="Nunito, sans-serif" font-size="22" font-weight="700" fill="white" text-anchor="middle">${escapeXml(ORG_NAMA)} · ${escapeXml(FOOTER_SOCMED)}</text>
+    <rect x="40" y="${H - 70}" width="${W - 80}" height="50" rx="14" fill="#f5c842"/>
+    <text x="${W/2}" y="${H - 36}" font-family="Nunito, sans-serif" font-size="22" font-weight="800" fill="${tcDark}" text-anchor="middle">${escapeXml(ORG_NAMA)} · ${escapeXml(FOOTER_SOCMED)}</text>
   </svg>`;
 
   return svg;
@@ -1082,6 +1110,8 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
 <div class="modal-bg" id="carousel-modal">
   <div class="modal">
     <h3>Carousel Instagram</h3>
+    <label>Pilih Bulan</label>
+    <select id="carousel-bulan-select" onchange="muatSlideCarousel(this.value)" style="width:100%;padding:10px;border-radius:8px;border:1px solid #ccc;margin:6px 0 12px;font-size:1rem;"></select>
     <p id="carousel-info" style="color:#444;margin:10px 0;">Menyiapkan slide...</p>
     <div id="carousel-list" style="display:flex;flex-direction:column;gap:8px;max-height:300px;overflow-y:auto;"></div>
     <div class="modal-btns">
@@ -1233,14 +1263,48 @@ async function simpanTambah() {
   }
 }
 
+function daftarBulanUnik() {
+  // Ambil daftar "Bulan Tahun" unik dari seluruh data (bukan hanya yang sedang difilter),
+  // diurutkan dari yang terbaru ke terlama.
+  const map = new Map();
+  allDataSemua.forEach(item => {
+    const label = item.tanggal?.split(' ').slice(1).join(' ');
+    if (label && !map.has(label)) map.set(label, item.timestamp || 0);
+  });
+  return Array.from(map.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([label]) => label);
+}
+
 async function buatCarousel() {
-  const bulan = document.getElementById('filter-bulan').value;
   const modal = document.getElementById('carousel-modal');
+  const select = document.getElementById('carousel-bulan-select');
+  modal.classList.add('open');
+
+  if (!allDataSemua.length) await muatSemuaDataUntukCarousel();
+
+  const filterAktif = document.getElementById('filter-bulan').value.trim();
+  const daftarBulan = daftarBulanUnik();
+  select.innerHTML = '<option value="">Semua Bulan</option>' +
+    daftarBulan.map(b => '<option value="'+b+'">'+b+'</option>').join('');
+  select.value = daftarBulan.includes(filterAktif) ? filterAktif : '';
+
+  muatSlideCarousel(select.value);
+}
+
+let allDataSemua = []; // cache seluruh data (tanpa filter) khusus untuk daftar pilihan bulan carousel
+async function muatSemuaDataUntukCarousel() {
+  try {
+    const r = await fetch('/api/kegiatan');
+    allDataSemua = await r.json();
+  } catch { allDataSemua = []; }
+}
+
+async function muatSlideCarousel(bulan) {
   const info = document.getElementById('carousel-info');
   const list = document.getElementById('carousel-list');
   list.innerHTML = '';
   info.textContent = 'Menyiapkan slide...';
-  modal.classList.add('open');
   try {
     const r = await fetch('/api/carousel-info' + (bulan ? '?bulan=' + encodeURIComponent(bulan) : ''));
     const d = await r.json();
