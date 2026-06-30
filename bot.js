@@ -832,7 +832,7 @@ function darkenHex(hex, amount = 0.45) {
 }
 
 // ── Carousel Instagram: generate gambar PNG (1080x1080) per slide ─────────
-const KEGIATAN_PER_SLIDE = 4; // 3-4 kegiatan tiap slide (otomatis 3 kalau sisa ganjil di slide terakhir)
+const KEGIATAN_PER_SLIDE = 3; // 3 kegiatan tiap slide — dikurangi dari 4 supaya tiap kartu cukup ruang untuk teks ringkasan 5W+1H
 
 function escapeXml(str = '') {
   return String(str)
@@ -889,10 +889,10 @@ async function buatRingkasanCarousel(item) {
     const client = new Anthropic({ apiKey: ANTHROPIC_KEY });
     const resp = await client.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 220,
+      max_tokens: 150,
       messages: [{
         role: 'user',
-        content: `Buat ringkasan kegiatan untuk slide carousel Instagram, maksimal 3 kalimat pendek, Bahasa Indonesia. Pastikan mencakup unsur 5W+1H sejauh tersedia di teks asli (siapa yang terlibat, apa kegiatannya, kapan ${item.tanggal ? `— gunakan tanggal "${item.tanggal}" jika teks asli tidak menyebutkan tanggal eksplisit` : ''}, di mana, mengapa/tujuannya, bagaimana pelaksanaannya). Jangan menambah fakta yang tidak ada di teks asli. Langsung tulis ringkasannya saja tanpa kata pengantar atau label:\n\nJudul: "${item.judul || ''}"\nTeks asli: "${teksAsli.slice(0, 600)}"`
+        content: `Buat ringkasan kegiatan untuk slide carousel Instagram, MAKSIMAL 2 kalimat pendek (total sekitar 25-30 kata), Bahasa Indonesia. Pastikan mencakup unsur 5W+1H sejauh tersedia di teks asli (siapa yang terlibat, apa kegiatannya, kapan ${item.tanggal ? `— gunakan tanggal "${item.tanggal}" jika teks asli tidak menyebutkan tanggal eksplisit` : ''}, di mana, mengapa/tujuannya, bagaimana pelaksanaannya) — padatkan jadi kalimat singkat, jangan bertele-tele. Jangan menambah fakta yang tidak ada di teks asli. Langsung tulis ringkasannya saja tanpa kata pengantar atau label:\n\nJudul: "${item.judul || ''}"\nTeks asli: "${teksAsli.slice(0, 600)}"`
       }]
     });
     return resp.content[0].text.trim();
@@ -952,7 +952,7 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
     const judulLines = wrapToLines(item.judul || 'Tanpa Judul', textMaxChars, 2);
     const judulLineH = 30;
     // Deskripsi bisa beberapa baris, dibatasi oleh tinggi kartu yang tersedia
-    const maxDeskLines = Math.max(3, Math.min(9, Math.floor((cardH - 40 - 26 - judulLines.length * judulLineH - 24) / 20)));
+    const maxDeskLines = Math.max(1, Math.min(8, Math.floor((cardH - 40 - 26 - judulLines.length * judulLineH - 24) / 20)));
     const deskLines = wrapToLines(ringkasanData[i] || item.deskripsi || '', textMaxChars, maxDeskLines);
     const deskLineH = 20;
 
@@ -1114,6 +1114,7 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
     <select id="carousel-bulan-select" onchange="muatSlideCarousel(this.value)" style="width:100%;padding:10px;border-radius:8px;border:1px solid #ccc;margin:6px 0 12px;font-size:1rem;"></select>
     <p id="carousel-info" style="color:#444;margin:10px 0;">Menyiapkan slide...</p>
     <div id="carousel-list" style="display:flex;flex-direction:column;gap:8px;max-height:300px;overflow-y:auto;"></div>
+    <button class="btn-gen" id="carousel-download-all-btn" onclick="downloadSemuaSlide()" style="justify-content:center;margin-top:10px;display:none;"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download Semua Slide</button>
     <div class="modal-btns">
       <button class="btn-cancel" onclick="closeCarouselModal()">Tutup</button>
     </div>
@@ -1303,7 +1304,10 @@ async function muatSemuaDataUntukCarousel() {
 async function muatSlideCarousel(bulan) {
   const info = document.getElementById('carousel-info');
   const list = document.getElementById('carousel-list');
+  const btnSemua = document.getElementById('carousel-download-all-btn');
   list.innerHTML = '';
+  btnSemua.style.display = 'none';
+  daftarUrlSlide = [];
   info.textContent = 'Menyiapkan slide...';
   try {
     const r = await fetch('/api/carousel-info' + (bulan ? '?bulan=' + encodeURIComponent(bulan) : ''));
@@ -1312,13 +1316,34 @@ async function muatSlideCarousel(bulan) {
     info.textContent = d.totalKegiatan + ' kegiatan → ' + d.totalSlide + ' slide. Klik untuk download tiap slide:';
     for (let i = 1; i <= d.totalSlide; i++) {
       const url = '/api/carousel-slide?slide=' + i + (bulan ? '&bulan=' + encodeURIComponent(bulan) : '');
+      daftarUrlSlide.push({ url, filename: 'carousel-slide-' + i + '.png' });
       const a = document.createElement('a');
       a.href = url; a.download = 'carousel-slide-' + i + '.png';
       a.className = 'btn-gen'; a.style.justifyContent = 'center';
       a.innerHTML = '<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download Slide ' + i + ' / ' + d.totalSlide;
       list.appendChild(a);
     }
+    if (d.totalSlide > 1) btnSemua.style.display = 'flex';
   } catch (e) { info.textContent = 'Gagal menyiapkan carousel.'; }
+}
+
+let daftarUrlSlide = [];
+async function downloadSemuaSlide() {
+  const btn = document.getElementById('carousel-download-all-btn');
+  const asli = btn.innerHTML;
+  btn.disabled = true;
+  for (let i = 0; i < daftarUrlSlide.length; i++) {
+    btn.textContent = 'Mengunduh ' + (i + 1) + ' / ' + daftarUrlSlide.length + '...';
+    const { url, filename } = daftarUrlSlide[i];
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    // Jeda singkat antar download supaya browser tidak memblokir unduhan beruntun
+    await new Promise(r => setTimeout(r, 600));
+  }
+  btn.disabled = false; btn.innerHTML = asli;
 }
 function closeCarouselModal() { document.getElementById('carousel-modal').classList.remove('open'); }
 
