@@ -1092,7 +1092,7 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
 <div class="mag-wrap">
   <div class="cover">
     <img src="${LOGO_URL_PUBLIK}" alt="${ORG_NAMA}" class="cover-logo">
-    <div class="cover-title">MW ON THE MONTH</div>
+    <div class="cover-title">ON THE MONTH</div>
     <div class="cover-month" id="cover-month">—</div>
   </div>
   <div class="timeline" id="timeline"><div class="loading">⏳ Memuat...</div></div>
@@ -1144,9 +1144,10 @@ async function loadData() {
 }
 function renderTimeline() {
   const tl = document.getElementById('timeline');
+  const filterAktif = document.getElementById('filter-bulan').value.trim();
+  const labelCover = filterAktif || 'Tahun 2026';
+  document.getElementById('cover-month').textContent = labelCover.toUpperCase();
   if (!allData.length) { tl.innerHTML = '<div class="empty">📭 Belum ada kegiatan.<br><br>Kirim foto/teks #kegiatan ke grup WA</div>'; return; }
-  const bulan = allData[0]?.tanggal?.split(' ').slice(1).join(' ') || '';
-  document.getElementById('cover-month').textContent = bulan.toUpperCase();
   tl.innerHTML = allData.map(item => {
     const dayMatch = item.tanggal?.match(/^(\\d+)/);
     const day = dayMatch ? dayMatch[1] : '?';
