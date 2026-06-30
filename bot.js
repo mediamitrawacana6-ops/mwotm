@@ -118,7 +118,7 @@ async function cariFotoUntukKegiatan(teksKegiatan, idYangSudahDipakai = []) {
   return {
     fileId: fotoTerpilih.id,
     fileName: fotoTerpilih.name,
-    directUrl: `https://drive.google.com/uc?export=view&id=${fotoTerpilih.id}`,
+    directUrl: `https://lh3.googleusercontent.com/d/${fotoTerpilih.id}=w1000`,
   };
 }
 
@@ -148,8 +148,8 @@ async function uploadKeDrive(buffer, filename, mimeType = 'image/jpeg') {
     });
 
     const fileId = res.data.id;
-    // URL langsung untuk ditampilkan sebagai <img>
-    const directUrl = `https://drive.google.com/uc?export=view&id=${fileId}`;
+    // URL langsung untuk ditampilkan sebagai <img> — endpoint thumbnail Google lebih andal
+    const directUrl = `https://lh3.googleusercontent.com/d/${fileId}=w1000`;
     return { fileId, directUrl, viewLink: res.data.webViewLink };
   } catch (e) {
     console.error('❌ Gagal upload ke Drive:', e.message);
@@ -537,7 +537,7 @@ function renderTimeline() {
     const dayMatch = item.tanggal?.match(/^(\\d+)/);
     const day = dayMatch ? dayMatch[1] : '?';
     const monthYr = item.tanggal?.replace(/^\\d+\\s*/, '') || '';
-    const fotoHTML = item.foto ? '<img src="'+item.foto+'" loading="lazy">' : '<div class="card-nofoto">📷</div>';
+    const fotoHTML = item.foto ? '<img src="'+item.foto+'" loading="lazy" onerror="this.outerHTML=\'<div class=&quot;card-nofoto&quot;>📷</div>\'">' : '<div class="card-nofoto">📷</div>';
     return '<div class="tl-item"><div class="bubble"><span class="day">'+day+'</span><span class="myr">'+monthYr+'</span></div><div class="card">'+fotoHTML+'<div class="card-body"><div class="card-judul">"'+(item.judul||'Tanpa Judul')+'"</div><div class="card-desc">'+(item.deskripsi||'')+'</div><div class="card-actions"><button class="btn-edit" onclick="openEdit(\\''+item.id+'\\')">✏️ Edit</button><button class="btn-del" onclick="hapus(\\''+item.id+'\\')">🗑️ Hapus</button></div></div></div></div>';
   }).join('');
 }
