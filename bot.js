@@ -22,15 +22,29 @@ const GOOGLE_SA_JSON   = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || ''; // isi J
 const DATA_FILE = './data/kegiatan.json';
 if (!fs.existsSync('./data')) fs.mkdirSync('./data', { recursive: true });
 
-// ── Logo organisasi (untuk watermark pojok kanan atas carousel) ──
-const LOGO_PATH = path.join(__dirname, 'assets', 'logo_mw.png');
-let LOGO_BASE64 = null;
-try {
-  if (fs.existsSync(LOGO_PATH)) {
-    LOGO_BASE64 = `data:image/png;base64,${fs.readFileSync(LOGO_PATH).toString('base64')}`;
+// ── Logo organisasi (watermark di web & carousel Instagram) ──
+// Diambil dari repo GitHub publik, dengan fallback ke file lokal assets/logo_mw.png jika ada.
+const LOGO_URL_PUBLIK = 'https://raw.githubusercontent.com/mediamitrawacana6-ops/mwotm/main/logo_mw.png';
+const LOGO_PATH_LOKAL = path.join(__dirname, 'assets', 'logo_mw.png');
+let LOGO_BASE64 = null; // dipakai untuk embed di gambar carousel (SVG → PNG via sharp)
+
+async function muatLogo() {
+  try {
+    if (fs.existsSync(LOGO_PATH_LOKAL)) {
+      LOGO_BASE64 = `data:image/png;base64,${fs.readFileSync(LOGO_PATH_LOKAL).toString('base64')}`;
+      console.log('✅ Logo dimuat dari file lokal assets/logo_mw.png');
+      return;
+    }
+  } catch (e) {
+    console.error('⚠️  Gagal baca logo lokal:', e.message);
   }
-} catch (e) {
-  console.error('⚠️  Gagal load logo:', e.message);
+  try {
+    const res = await axios.get(LOGO_URL_PUBLIK, { responseType: 'arraybuffer', timeout: 10000 });
+    LOGO_BASE64 = `data:image/png;base64,${Buffer.from(res.data).toString('base64')}`;
+    console.log('✅ Logo dimuat dari GitHub');
+  } catch (e) {
+    console.error('⚠️  Gagal muat logo dari GitHub:', e.message);
+  }
 }
 
 // ── Google Drive setup ────────────────────────────────────
@@ -553,7 +567,20 @@ app.put('/api/kegiatan/:id', (req, res) => {
     let data = loadData();
     const idx = data.findIndex(d => d.id === req.params.id);
     if (idx === -1) return res.status(404).json({ error: 'Tidak ditemukan' });
-    data[idx] = { ...data[idx], ...req.body };
+
+    const { tanggalISO, ...rest } = req.body;
+    const updates = { ...rest };
+
+    if (tanggalISO) {
+      const [th, bl, hr] = tanggalISO.split('-').map(Number);
+      if (th && bl && hr) {
+        const tanggalDate = new Date(th, bl - 1, hr);
+        updates.tanggal = formatTanggal(tanggalDate);
+        updates.timestamp = Math.floor(tanggalDate.getTime() / 1000);
+      }
+    }
+
+    data[idx] = { ...data[idx], ...updates };
     saveData(data);
     res.json({ ok: true });
   } catch { res.status(500).json({ error: 'Gagal update' }); }
@@ -797,11 +824,13 @@ app.get('/', (req, res) => {
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160deg, var(--tc) 0%, var(--tc-dark) 100%) fixed; background-color: var(--tc); min-height: 100vh; }
 .topbar { background: rgba(0,0,0,0.2); padding: 12px 24px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; backdrop-filter: blur(8px); position: sticky; top: 0; z-index: 99; }
-.topbar h1 { font-family: 'Fredoka One', cursive; color: white; font-size: 1.2rem; }
+.topbar h1 { font-family: 'Fredoka One', cursive; color: white; font-size: 1.2rem; display:flex; align-items:center; gap:10px; }
+.topbar-logo { height: 32px; width: auto; border-radius: 6px; background: white; padding: 2px 6px; }
+.cover { padding: 32px 20px 20px; position: relative; }
+.cover-logo { position: absolute; top: 24px; right: 20px; height: 56px; width: auto; background: white; border-radius: 10px; padding: 6px 10px; box-shadow: 0 4px 14px rgba(0,0,0,0.25); }
 .topbar input { padding: 7px 12px; border-radius: 8px; border: none; font-family:'Nunito',sans-serif; font-size: 0.88rem; background: rgba(255,255,255,0.15); color: white; outline: none; }
 .btn-gen { padding: 8px 18px; background: var(--yellow); color: var(--dark); border: none; border-radius: 10px; font-weight: 800; font-size: 0.9rem; cursor: pointer; }
 .mag-wrap { max-width: 820px; margin: 0 auto; padding: 0 16px 60px; }
-.cover { padding: 32px 20px 20px; }
 .cover-title { font-family:'Fredoka One',cursive; color:white; font-size:clamp(1.6rem,4vw,2.6rem); }
 .cover-month { font-family:'Fredoka One',cursive; color:var(--yellow); font-size:clamp(3rem,10vw,5.5rem); line-height:1; }
 .timeline { position: relative; padding: 0 8px; }
@@ -842,7 +871,7 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
 </head>
 <body>
 <div class="topbar">
-  <h1>📰 E-Magazine</h1>
+  <h1><img src="${LOGO_URL_PUBLIK}" alt="${ORG_NAMA}" class="topbar-logo"> E-Magazine</h1>
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
     <input type="text" id="filter-bulan" placeholder="Filter bulan (mis: Juli 2025)" onchange="loadData()">
     <button class="btn-gen" onclick="openAddModal()">➕ Tambah Kegiatan</button>
@@ -862,6 +891,7 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
 </div>
 <div class="mag-wrap">
   <div class="cover">
+    <img src="${LOGO_URL_PUBLIK}" alt="${ORG_NAMA}" class="cover-logo">
     <div class="cover-title">ON THE MONTH</div>
     <div class="cover-month" id="cover-month">—</div>
   </div>
@@ -886,6 +916,7 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
   <div class="modal">
     <h3>✏️ Edit Kegiatan</h3>
     <input type="hidden" id="edit-id">
+    <label>Tanggal</label><input type="date" id="edit-tanggal">
     <label>Judul</label><input type="text" id="edit-judul">
     <label>Deskripsi</label><textarea id="edit-desc"></textarea>
     <div class="modal-btns">
@@ -925,10 +956,25 @@ function renderTimeline() {
     return '<div class="tl-item"><div class="bubble"><span class="day">'+day+'</span><span class="myr">'+monthYr+'</span></div><div class="card">'+fotoHTML+'<div class="card-body"><div class="card-judul">"'+(item.judul||'Tanpa Judul')+'"</div><div class="card-desc">'+(item.deskripsi||'')+'</div><div class="card-actions"><button class="btn-edit" onclick="openEdit(\\''+item.id+'\\')">✏️ Edit</button><button class="btn-del" onclick="hapus(\\''+item.id+'\\')">🗑️ Hapus</button></div></div></div></div>';
   }).join('');
 }
+const NAMA_BULAN_ID = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
+function tanggalIdKeISO(tanggalStr) {
+  // "30 Juni 2026" -> "2026-06-30"
+  if (!tanggalStr) return '';
+  const parts = tanggalStr.trim().split(/\s+/);
+  if (parts.length < 3) return '';
+  const hari = parseInt(parts[0], 10);
+  const bulanIdx = NAMA_BULAN_ID.findIndex(b => b.toLowerCase() === parts[1].toLowerCase());
+  const tahun = parseInt(parts[2], 10);
+  if (!hari || bulanIdx === -1 || !tahun) return '';
+  const mm = String(bulanIdx + 1).padStart(2, '0');
+  const dd = String(hari).padStart(2, '0');
+  return tahun + '-' + mm + '-' + dd;
+}
 function openEdit(id) {
   const item = allData.find(d => d.id === id);
   if (!item) return;
   document.getElementById('edit-id').value = id;
+  document.getElementById('edit-tanggal').value = tanggalIdKeISO(item.tanggal);
   document.getElementById('edit-judul').value = item.judul || '';
   document.getElementById('edit-desc').value = item.deskripsi || '';
   document.getElementById('modal').classList.add('open');
@@ -1014,7 +1060,8 @@ async function saveEdit() {
   const id = document.getElementById('edit-id').value;
   const judul = document.getElementById('edit-judul').value;
   const deskripsi = document.getElementById('edit-desc').value;
-  await fetch('/api/kegiatan/' + id, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({judul, deskripsi}) });
+  const tanggalISO = document.getElementById('edit-tanggal').value;
+  await fetch('/api/kegiatan/' + id, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({judul, deskripsi, tanggalISO}) });
   closeModal(); loadData();
 }
 async function hapus(id) {
@@ -1029,7 +1076,7 @@ setInterval(loadData, 30000);
 </html>`);
 });
 
-restoreDataDariDrive().finally(() => {
+Promise.all([restoreDataDariDrive(), muatLogo()]).finally(() => {
   app.listen(PORT, () => {
     console.log(`🌐 Server aktif di port ${PORT}`);
     console.log(`📲 Webhook URL untuk Fonnte: https://<domain-kamu>/webhook/fonnte`);
