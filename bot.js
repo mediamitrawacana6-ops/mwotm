@@ -882,7 +882,9 @@ async function ambilFotoBase64(item) {
 }
 
 // ── AI: ringkasan khusus carousel — padat tapi mencakup 5W+1H ─────────────
-async function buatRingkasanCarousel(item) {
+// targetKata disesuaikan dari pemanggil berdasarkan berapa banyak kartu berbagi 1 slide,
+// supaya ringkasan tidak terpotong di tengah kalimat saat ruang kartu lebih sempit.
+async function buatRingkasanCarousel(item, targetKata = '25-30 kata, maksimal 2 kalimat pendek') {
   const teksAsli = item.deskripsi || item.judul || '';
   if (!ANTHROPIC_KEY) return teksAsli;
   try {
@@ -892,7 +894,7 @@ async function buatRingkasanCarousel(item) {
       max_tokens: 150,
       messages: [{
         role: 'user',
-        content: `Buat ringkasan kegiatan untuk slide carousel Instagram, MAKSIMAL 2 kalimat pendek (total sekitar 25-30 kata), Bahasa Indonesia. Pastikan mencakup unsur 5W+1H sejauh tersedia di teks asli (siapa yang terlibat, apa kegiatannya, kapan ${item.tanggal ? `— gunakan tanggal "${item.tanggal}" jika teks asli tidak menyebutkan tanggal eksplisit` : ''}, di mana, mengapa/tujuannya, bagaimana pelaksanaannya) — padatkan jadi kalimat singkat, jangan bertele-tele. Jangan menambah fakta yang tidak ada di teks asli. Langsung tulis ringkasannya saja tanpa kata pengantar atau label:\n\nJudul: "${item.judul || ''}"\nTeks asli: "${teksAsli.slice(0, 600)}"`
+        content: `Buat ringkasan kegiatan untuk slide carousel Instagram, MAKSIMAL ${targetKata}, Bahasa Indonesia. Pastikan mencakup unsur 5W+1H sejauh tersedia di teks asli (siapa yang terlibat, apa kegiatannya, kapan ${item.tanggal ? `— gunakan tanggal "${item.tanggal}" jika teks asli tidak menyebutkan tanggal eksplisit` : ''}, di mana, mengapa/tujuannya, bagaimana pelaksanaannya) — padatkan jadi kalimat singkat dan utuh (jangan terpotong di tengah), pilih unsur yang paling penting saja kalau ruang terbatas. Jangan menambah fakta yang tidak ada di teks asli. Langsung tulis ringkasannya saja tanpa kata pengantar atau label:\n\nJudul: "${item.judul || ''}"\nTeks asli: "${teksAsli.slice(0, 600)}"`
       }]
     });
     return resp.content[0].text.trim();
@@ -935,13 +937,24 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
   const fotoSize = Math.min(cardH - 24, 420);
 
   const fotoData = await Promise.all(items.map(ambilFotoBase64));
-  const ringkasanData = await Promise.all(items.map(buatRingkasanCarousel));
+  // Slide dengan lebih banyak kartu (ruang lebih sempit) → minta ringkasan AI lebih singkat
+  // supaya tidak terpotong di tengah kalimat.
+  const targetKata = items.length >= 3 ? '15-18 kata, 1 kalimat singkat dan utuh' : '25-30 kata, maksimal 2 kalimat pendek';
+  const ringkasanData = await Promise.all(items.map(it => buatRingkasanCarousel(it, targetKata)));
+
+  // Ukuran font & jumlah baris judul menyesuaikan kepadatan slide
+  const kompak = items.length >= 3;
+  const judulFontSize = kompak ? 23 : 26;
+  const judulLineH = kompak ? 27 : 30;
+  const maxJudulLines = kompak ? 3 : 2;
+  const deskFontSize = kompak ? 16 : 18;
+  const deskLineH = kompak ? 19 : 20;
 
   // Lebar teks menyesuaikan ukuran foto (foto lebih besar → teks lebih sempit)
   const fotoX = 56;
   const textX = fotoX + fotoSize + 32;
   const textAvailPx = (W - 40) - textX - 24;
-  const textMaxChars = Math.max(18, Math.round(textAvailPx / 17.5));
+  const textMaxChars = Math.max(18, Math.round(textAvailPx / (kompak ? 15.5 : 17.5)));
 
   let cardsSvg = '';
   items.forEach((item, i) => {
@@ -949,12 +962,10 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
     const foto = fotoData[i];
     const fotoY = y + (cardH - fotoSize) / 2;
 
-    const judulLines = wrapToLines(item.judul || 'Tanpa Judul', textMaxChars, 2);
-    const judulLineH = 30;
+    const judulLines = wrapToLines(item.judul || 'Tanpa Judul', textMaxChars, maxJudulLines);
     // Deskripsi bisa beberapa baris, dibatasi oleh tinggi kartu yang tersedia
-    const maxDeskLines = Math.max(1, Math.min(8, Math.floor((cardH - 40 - 26 - judulLines.length * judulLineH - 24) / 20)));
+    const maxDeskLines = Math.max(1, Math.min(8, Math.floor((cardH - 40 - 26 - judulLines.length * judulLineH - 24) / deskLineH)));
     const deskLines = wrapToLines(ringkasanData[i] || item.deskripsi || '', textMaxChars, maxDeskLines);
-    const deskLineH = 20;
 
     // Tinggi total blok teks (tanggal + judul + jarak + deskripsi), untuk dipusatkan vertikal dalam kartu
     const blokTinggi = 26 + 14 + judulLines.length * judulLineH + 14 + deskLines.length * deskLineH;
@@ -973,8 +984,8 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
          <text x="${fotoX + fotoSize/2}" y="${fotoY + fotoSize/2 + 16}" font-size="48" text-anchor="middle">📷</text>`
     }
     <text x="${textX}" y="${tanggalY}" font-family="Nunito, sans-serif" font-size="22" font-weight="800" fill="#f5c842">${escapeXml(item.tanggal || '')}</text>
-    <text font-family="Nunito, sans-serif" font-size="26" font-weight="800" fill="white">${linesToTspans(judulLines, textX, judulY, judulLineH)}</text>
-    <text font-family="Nunito, sans-serif" font-size="18" fill="rgba(255,255,255,0.85)">${linesToTspans(deskLines, textX, deskY, deskLineH)}</text>
+    <text font-family="Nunito, sans-serif" font-size="${judulFontSize}" font-weight="800" fill="white">${linesToTspans(judulLines, textX, judulY, judulLineH)}</text>
+    <text font-family="Nunito, sans-serif" font-size="${deskFontSize}" fill="rgba(255,255,255,0.85)">${linesToTspans(deskLines, textX, deskY, deskLineH)}</text>
     `;
   });
 
