@@ -934,8 +934,7 @@ function linesToTspans(lines, x, y, lineHeight) {
 function linesToTspansJustified(lines, x, y, lineHeight, widthPx, maxCharsPerLine) {
   return lines.map((line, i) => {
     const isLast = i === lines.length - 1;
-    const cukupPenuh = maxCharsPerLine ? (line.length / maxCharsPerLine) >= 0.62 : true;
-    const bolehJustify = !isLast && line.trim().includes(' ') && cukupPenuh;
+    const bolehJustify = !isLast && line.trim().includes(' ');
     const attrs = bolehJustify ? ` textLength="${widthPx}" lengthAdjust="spacingAndGlyphs"` : '';
     return `<tspan x="${x}" y="${y + i * lineHeight}"${attrs}>${escapeXml(line)}</tspan>`;
   }).join('');
