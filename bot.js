@@ -1159,11 +1159,10 @@ app.get('/', (req, res) => {
 <style>
 :root { --tc: ${TEMA_WARNA}; --tc-dark: ${darkenHex(TEMA_WARNA)}; --yellow: #f5c842; --dark: #2d1a2e; }
 * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
-@page { margin: 50px 28px; }
 @media print {
-  html, body { background: var(--tc-dark) !important; padding: 0 !important; }
+  html, body { background: var(--tc-dark) !important; margin: 0 !important; padding: 0 !important; }
   .topbar, .modal-bg, .lightbox-bg, .card-actions { display: none !important; }
-  .tl-item { break-inside: avoid; page-break-inside: avoid; margin-bottom: 40px; }
+  .tl-item { break-inside: avoid; page-break-inside: avoid; margin-bottom: 28px; }
   .card {
     break-inside: avoid; page-break-inside: avoid;
     backdrop-filter: none !important;
@@ -1174,10 +1173,11 @@ app.get('/', (req, res) => {
   .card-desc { color: #2d1a2e !important; font-weight: 600 !important; font-family: 'Nunito', Arial, sans-serif !important; }
   .card-judul { color: var(--tc-dark) !important; font-weight: 900 !important; font-size: 1.05rem !important; font-family: 'Nunito', Arial, sans-serif !important; }
   .timeline::before { background: rgba(255,255,255,0.6) !important; }
-  .timeline { padding-top: 20px; }
-  .footer-bar { break-inside: avoid; page-break-inside: avoid; }
-  .mag-wrap { max-width: 100%; padding: 0 10px 24px; }
-  .cover { padding-top: 20px; }
+  .footer-bar { break-inside: avoid; page-break-inside: avoid; margin-top: 16px; }
+  /* Padding di sini SELALU diterapkan (tidak bergantung pengaturan margin di dialog print browser),
+     supaya konten tidak pernah mepet ke tepi halaman walau setting printer berbeda-beda. */
+  .mag-wrap { max-width: 100%; padding: 36px 26px 30px; }
+  .cover { padding-top: 0; }
   .cover-title { color: white !important; }
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
