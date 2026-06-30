@@ -1159,17 +1159,19 @@ app.get('/', (req, res) => {
 <style>
 :root { --tc: ${TEMA_WARNA}; --tc-dark: ${darkenHex(TEMA_WARNA)}; --yellow: #f5c842; --dark: #2d1a2e; }
 * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; color-adjust: exact !important; }
-@page { margin: 28px 24px; }
+@page { margin: 40px 28px; }
 @media print {
-  html, body { background: linear-gradient(160deg, var(--tc) 0%, var(--tc-dark) 100%) !important; }
+  html, body { background: linear-gradient(160deg, var(--tc) 0%, var(--tc-dark) 100%) !important; padding: 0 !important; }
   .topbar, .modal-bg, .lightbox-bg, .card-actions { display: none !important; }
-  .tl-item { break-inside: avoid; page-break-inside: avoid; }
-  .card { break-inside: avoid; page-break-inside: avoid; backdrop-filter: none !important; background: rgba(255,255,255,0.22) !important; border-color: rgba(255,255,255,0.4) !important; }
-  .card-desc { color: rgba(255,255,255,0.97) !important; }
+  .tl-item { break-inside: avoid; page-break-inside: avoid; margin-bottom: 36px; }
+  .card { break-inside: avoid; page-break-inside: avoid; backdrop-filter: none !important; background: rgba(255,255,255,0.32) !important; border: 1.5px solid rgba(255,255,255,0.55) !important; }
+  .card-desc { color: #ffffff !important; }
   .card-judul { color: var(--yellow) !important; }
   .timeline::before { display: none; }
+  .timeline { padding-top: 12px; }
   .footer-bar { break-inside: avoid; page-break-inside: avoid; }
-  .mag-wrap { max-width: 100%; padding: 0 6px 24px; }
+  .mag-wrap { max-width: 100%; padding: 0 10px 24px; }
+  .cover { padding-top: 12px; }
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160deg, var(--tc) 0%, var(--tc-dark) 100%) fixed; background-color: var(--tc); min-height: 100vh; }
