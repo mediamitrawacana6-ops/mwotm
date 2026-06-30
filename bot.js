@@ -1282,7 +1282,7 @@ async function syncWebsite() {
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || 'Gagal sinkron');
-    alert('Sinkron selesai!\nDitemukan: ' + d.ditemukan + ' artikel\nDitambahkan: ' + d.ditambah + ' kegiatan baru\nDilewati (sudah ada): ' + d.dilewati);
+    alert('Sinkron selesai!\\nDitemukan: ' + d.ditemukan + ' artikel\\nDitambahkan: ' + d.ditambah + ' kegiatan baru\\nDilewati (sudah ada): ' + d.dilewati);
     loadData();
   } catch (e) {
     alert('Gagal sinkron dari website: ' + e.message);
