@@ -645,26 +645,17 @@ async function prosesArtikelJadiKegiatan(artikel) {
   const deskripsi = await rapikanDeskripsi(artikel.isiAsli || artikel.judulAsli);
   const judul = artikel.judulAsli?.trim() || await ekstrakJudul(deskripsi);
 
-  let driveResult = null;
-  if (artikel.fotoUrl) {
-    try {
-      const imgRes = await axios.get(artikel.fotoUrl, { responseType: 'arraybuffer', timeout: 20000 });
-      const mimeType = imgRes.headers['content-type'] || 'image/jpeg';
-      const ext = mimeType.split('/')[1]?.split(';')[0] || 'jpg';
-      driveResult = await uploadKeDrive(Buffer.from(imgRes.data), `web_${Date.now()}.${ext}`, mimeType);
-    } catch (e) {
-      console.warn('⚠️  Gagal unduh foto artikel:', e.message);
-    }
-  }
-
+  // Foto artikel website sudah punya URL publik sendiri (wp-content/uploads/...),
+  // jadi langsung dipakai tanpa upload ulang ke Drive — menghindari keterbatasan
+  // "service account tidak punya storage quota" saat membuat file baru di Drive biasa.
   return {
     id: `${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
     tanggal,
     timestamp,
     judul,
     deskripsi,
-    foto: driveResult ? driveResult.directUrl : null,
-    fotoDriveId: driveResult ? driveResult.fileId : null,
+    foto: artikel.fotoUrl || null,
+    fotoDriveId: null,
     sumber: 'website',
     sumberUrl: artikel.sumberUrl,
   };
