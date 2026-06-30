@@ -1162,6 +1162,11 @@ app.get('/', (req, res) => {
 @media print {
   html, body { background: linear-gradient(160deg, var(--tc) 0%, var(--tc-dark) 100%) !important; }
   .topbar, .modal-bg, .lightbox-bg { display: none !important; }
+  .tl-item { break-inside: avoid; page-break-inside: avoid; }
+  .card { break-inside: avoid; page-break-inside: avoid; }
+  .timeline::before { display: none; }
+  .footer-bar { break-inside: avoid; page-break-inside: avoid; }
+  .mag-wrap { max-width: 100%; }
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160deg, var(--tc) 0%, var(--tc-dark) 100%) fixed; background-color: var(--tc); min-height: 100vh; }
@@ -1219,7 +1224,7 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
     <input type="text" id="filter-bulan" placeholder="Filter bulan (mis: Juli 2025)" onchange="loadData()">
     <button class="btn-gen" onclick="openAddModal()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Tambah Kegiatan</button>
-    <button class="btn-gen" onclick="window.print()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg> Print / PDF</button>
+    <button class="btn-gen" onclick="bukaPrintModal()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg> Print / PDF</button>
     <button class="btn-gen" onclick="buatCarousel()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg> Buat Carousel IG</button>
     <button class="btn-gen" id="sync-website-btn" onclick="syncWebsite()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg> Sync dari Website</button>
   </div>
@@ -1234,6 +1239,17 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
     <button class="btn-gen" id="carousel-download-all-btn" onclick="downloadSemuaSlide()" style="justify-content:center;margin-top:10px;display:none;"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download Semua Slide</button>
     <div class="modal-btns">
       <button class="btn-cancel" onclick="closeCarouselModal()">Tutup</button>
+    </div>
+  </div>
+</div>
+<div class="modal-bg" id="print-modal">
+  <div class="modal">
+    <h3>Print / PDF</h3>
+    <label>Pilih Bulan</label>
+    <select id="print-bulan-select" style="width:100%;padding:10px;border-radius:8px;border:1px solid #ccc;margin:6px 0 12px;font-size:1rem;"></select>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closePrintModal()">Batal</button>
+      <button class="btn-save" onclick="cetakPDF()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg> Print</button>
     </div>
   </div>
 </div>
@@ -1463,6 +1479,28 @@ async function downloadSemuaSlide() {
   btn.disabled = false; btn.innerHTML = asli;
 }
 function closeCarouselModal() { document.getElementById('carousel-modal').classList.remove('open'); }
+
+async function bukaPrintModal() {
+  const modal = document.getElementById('print-modal');
+  const select = document.getElementById('print-bulan-select');
+  if (!allDataSemua.length) await muatSemuaDataUntukCarousel();
+  const filterAktif = document.getElementById('filter-bulan').value.trim();
+  const daftarBulan = daftarBulanUnik();
+  select.innerHTML = '<option value="">Semua Bulan</option>' +
+    daftarBulan.map(b => '<option value="'+b+'">'+b+'</option>').join('');
+  select.value = daftarBulan.includes(filterAktif) ? filterAktif : '';
+  modal.classList.add('open');
+}
+function closePrintModal() { document.getElementById('print-modal').classList.remove('open'); }
+async function cetakPDF() {
+  const bulan = document.getElementById('print-bulan-select').value;
+  document.getElementById('filter-bulan').value = bulan;
+  await loadData();
+  closePrintModal();
+  // Beri jeda sedikit supaya layout & gambar sempat selesai dirender sebelum dialog print dibuka,
+  // supaya kartu tidak terpotong setengah jadi saat dicetak.
+  setTimeout(() => window.print(), 250);
+}
 
 async function syncWebsite() {
   const dariISO = prompt('Sinkron berita dari tanggal (YYYY-MM-DD):', '2026-01-01');
