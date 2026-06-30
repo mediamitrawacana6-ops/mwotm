@@ -502,6 +502,42 @@ app.put('/api/kegiatan/:id', (req, res) => {
   } catch { res.status(500).json({ error: 'Gagal update' }); }
 });
 
+// ── Carousel Instagram ─────────────────────────────────────
+app.get('/api/carousel-info', (req, res) => {
+  const bulan = req.query.bulan || '';
+  let data = loadData();
+  if (bulan) data = data.filter(d => d.tanggal && d.tanggal.toLowerCase().includes(bulan.toLowerCase()));
+  const totalSlide = Math.ceil(data.length / KEGIATAN_PER_SLIDE);
+  res.json({ totalKegiatan: data.length, totalSlide });
+});
+
+app.get('/api/carousel-slide', async (req, res) => {
+  try {
+    const bulan = req.query.bulan || '';
+    const slideKe = parseInt(req.query.slide || '1', 10);
+    let data = loadData();
+    if (bulan) data = data.filter(d => d.tanggal && d.tanggal.toLowerCase().includes(bulan.toLowerCase()));
+    data.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+    if (!data.length) return res.status(404).send('Tidak ada kegiatan');
+
+    const bulanLabel = data[0]?.tanggal?.split(' ').slice(1).join(' ') || bulan || '';
+    const totalSlide = Math.ceil(data.length / KEGIATAN_PER_SLIDE);
+    const items = data.slice((slideKe - 1) * KEGIATAN_PER_SLIDE, slideKe * KEGIATAN_PER_SLIDE);
+    if (!items.length) return res.status(404).send('Slide tidak ditemukan');
+
+    const sharp = require('sharp');
+    const svg = await buatSlideSvg(items, slideKe, totalSlide, bulanLabel);
+    const png = await sharp(Buffer.from(svg)).png().toBuffer();
+
+    res.set('Content-Type', 'image/png');
+    res.set('Content-Disposition', `attachment; filename="carousel-slide-${slideKe}.png"`);
+    res.send(png);
+  } catch (e) {
+    console.error('❌ Gagal buat slide carousel:', e.message);
+    res.status(500).send('Gagal membuat gambar carousel');
+  }
+});
+
 // ── Helper: gelapkan warna hex (pengganti color-mix yang tidak universal) ──
 function darkenHex(hex, amount = 0.45) {
   try {
@@ -512,6 +548,123 @@ function darkenHex(hex, amount = 0.45) {
     const b = Math.max(0, Math.round(parseInt(h.slice(4,6),16) * (1 - amount)));
     return `#${r.toString(16).padStart(2,'0')}${g.toString(16).padStart(2,'0')}${b.toString(16).padStart(2,'0')}`;
   } catch { return '#5a1d38'; }
+}
+
+// ── Carousel Instagram: generate gambar PNG (1080x1080) per slide ─────────
+const KEGIATAN_PER_SLIDE = 4; // 3-4 kegiatan tiap slide (otomatis 3 kalau sisa ganjil di slide terakhir)
+
+function escapeXml(str = '') {
+  return String(str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
+// Pecah teks panjang jadi beberapa baris <tspan> agar muat di lebar tertentu (estimasi karakter, bukan ukur asli)
+function wrapTextSvg(text, x, y, maxCharsPerLine, maxLines, lineHeight, opts = '') {
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  const lines = [];
+  let current = '';
+  for (const w of words) {
+    const test = current ? current + ' ' + w : w;
+    if (test.length > maxCharsPerLine && current) { lines.push(current); current = w; }
+    else current = test;
+    if (lines.length >= maxLines) break;
+  }
+  if (current && lines.length < maxLines) lines.push(current);
+  if (lines.length === maxLines) {
+    const last = lines[maxLines - 1];
+    if (last.length > maxCharsPerLine - 1) lines[maxLines - 1] = last.slice(0, maxCharsPerLine - 1).trim() + '…';
+  }
+  const tspans = lines.map((line, i) =>
+    `<tspan x="${x}" y="${y + i * lineHeight}">${escapeXml(line)}</tspan>`
+  ).join('');
+  return `<text ${opts}>${tspans}</text>`;
+}
+
+async function ambilFotoBase64(item) {
+  try {
+    if (item.fotoDriveId) {
+      const buf = await downloadDriveFile(item.fotoDriveId);
+      if (buf) return `data:image/jpeg;base64,${buf.toString('base64')}`;
+    }
+    if (item.foto) {
+      const res = await axios.get(item.foto, { responseType: 'arraybuffer', timeout: 10000 });
+      return `data:image/jpeg;base64,${Buffer.from(res.data).toString('base64')}`;
+    }
+  } catch (e) { console.error('⚠️  Gagal ambil foto untuk carousel:', e.message); }
+  return null;
+}
+
+async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
+  const W = 1080, H = 1080;
+  const tcDark = darkenHex(TEMA_WARNA, 0.55);
+  const cardTop = 300;
+  const cardGap = 18;
+  const cardH = Math.floor((H - cardTop - 90 - (items.length - 1) * cardGap) / items.length);
+  const fotoSize = Math.min(cardH - 24, 150);
+
+  const fotoData = await Promise.all(items.map(ambilFotoBase64));
+
+  let cardsSvg = '';
+  items.forEach((item, i) => {
+    const y = cardTop + i * (cardH + cardGap);
+    const foto = fotoData[i];
+    const fotoX = 56, fotoY = y + (cardH - fotoSize) / 2;
+    const textX = fotoX + fotoSize + 32;
+    const textMaxChars = 46;
+
+    cardsSvg += `
+    <rect x="40" y="${y}" width="${W - 80}" height="${cardH}" rx="20" fill="rgba(255,255,255,0.12)"/>
+    ${foto
+      ? `<clipPath id="clip${i}"><rect x="${fotoX}" y="${fotoY}" width="${fotoSize}" height="${fotoSize}" rx="14"/></clipPath>
+         <image href="${foto}" x="${fotoX}" y="${fotoY}" width="${fotoSize}" height="${fotoSize}" preserveAspectRatio="xMidYMid slice" clip-path="url(#clip${i})"/>`
+      : `<rect x="${fotoX}" y="${fotoY}" width="${fotoSize}" height="${fotoSize}" rx="14" fill="rgba(255,255,255,0.18)"/>
+         <text x="${fotoX + fotoSize/2}" y="${fotoY + fotoSize/2 + 16}" font-size="42" text-anchor="middle">📷</text>`
+    }
+    <text x="${textX}" y="${y + 40}" font-family="Nunito, sans-serif" font-size="22" font-weight="800" fill="#f5c842">${escapeXml(item.tanggal || '')}</text>
+    ${wrapTextSvg(item.judul || 'Tanpa Judul', textX, y + 76, textMaxChars, 2, 30, 'font-family="Nunito, sans-serif" font-size="26" font-weight="800" fill="white"')}
+    ${wrapTextSvg(item.deskripsi || '', textX, y + cardH - 24, textMaxChars, 1, 22, 'font-family="Nunito, sans-serif" font-size="18" fill="rgba(255,255,255,0.85)"')}
+    `;
+  });
+
+  const svg = `
+  <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="${TEMA_WARNA}"/>
+        <stop offset="100%" stop-color="${tcDark}"/>
+      </linearGradient>
+    </defs>
+    <rect width="${W}" height="${H}" fill="url(#bg)"/>
+    <text x="56" y="90" font-family="Nunito, sans-serif" font-size="30" font-weight="900" fill="white" letter-spacing="2">ON THE MONTH</text>
+    <rect x="56" y="108" width="64" height="8" rx="4" fill="#f5c842"/>
+    <text x="56" y="190" font-family="Nunito, sans-serif" font-size="64" font-weight="900" fill="#f5c842">${escapeXml(bulanLabel.toUpperCase())}</text>
+    ${totalSlide > 1 ? `<text x="${W - 56}" y="90" font-family="Nunito, sans-serif" font-size="26" font-weight="800" fill="rgba(255,255,255,0.7)" text-anchor="end">${slideKe}/${totalSlide}</text>` : ''}
+    ${cardsSvg}
+    <text x="${W/2}" y="${H - 36}" font-family="Nunito, sans-serif" font-size="22" font-weight="700" fill="white" text-anchor="middle">${escapeXml(ORG_NAMA)} · ${escapeXml(FOOTER_SOCMED)}</text>
+  </svg>`;
+
+  return svg;
+}
+
+async function buatGambarCarousel(bulan) {
+  const sharp = require('sharp');
+  let data = loadData();
+  if (bulan) data = data.filter(d => d.tanggal && d.tanggal.toLowerCase().includes(bulan.toLowerCase()));
+  data.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+  if (!data.length) return [];
+
+  const bulanLabel = data[0]?.tanggal?.split(' ').slice(1).join(' ') || bulan || '';
+  const totalSlide = Math.ceil(data.length / KEGIATAN_PER_SLIDE);
+  const hasil = [];
+
+  for (let i = 0; i < totalSlide; i++) {
+    const items = data.slice(i * KEGIATAN_PER_SLIDE, (i + 1) * KEGIATAN_PER_SLIDE);
+    const svg = await buatSlideSvg(items, i + 1, totalSlide, bulanLabel);
+    const png = await sharp(Buffer.from(svg)).png().toBuffer();
+    hasil.push(png);
+  }
+  return hasil;
 }
 
 // ── Halaman utama: E-Magazine Viewer ─────────────────────
@@ -582,11 +735,22 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
     <input type="text" id="filter-bulan" placeholder="Filter bulan (mis: Juli 2025)" onchange="loadData()">
     <button class="btn-gen" onclick="window.print()">🖨️ Print / PDF</button>
+    <button class="btn-gen" onclick="buatCarousel()">📸 Buat Carousel IG</button>
+  </div>
+</div>
+<div class="modal-bg" id="carousel-modal">
+  <div class="modal">
+    <h3>📸 Carousel Instagram</h3>
+    <p id="carousel-info" style="color:#444;margin:10px 0;">Menyiapkan slide...</p>
+    <div id="carousel-list" style="display:flex;flex-direction:column;gap:8px;max-height:300px;overflow-y:auto;"></div>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeCarouselModal()">Tutup</button>
+    </div>
   </div>
 </div>
 <div class="mag-wrap">
   <div class="cover">
-    <div class="cover-title">MW ON THE MONTH</div>
+    <div class="cover-title">ON THE MONTH</div>
     <div class="cover-month" id="cover-month">—</div>
   </div>
   <div class="timeline" id="timeline"><div class="loading">⏳ Memuat...</div></div>
@@ -649,6 +813,32 @@ function openLightbox(url) {
   document.getElementById('lightbox').classList.add('open');
 }
 function closeLightbox() { document.getElementById('lightbox').classList.remove('open'); }
+
+async function buatCarousel() {
+  const bulan = document.getElementById('filter-bulan').value;
+  const modal = document.getElementById('carousel-modal');
+  const info = document.getElementById('carousel-info');
+  const list = document.getElementById('carousel-list');
+  list.innerHTML = '';
+  info.textContent = '⏳ Menyiapkan slide...';
+  modal.classList.add('open');
+  try {
+    const r = await fetch('/api/carousel-info' + (bulan ? '?bulan=' + encodeURIComponent(bulan) : ''));
+    const d = await r.json();
+    if (!d.totalSlide) { info.textContent = '📭 Tidak ada kegiatan untuk dibuatkan carousel.'; return; }
+    info.textContent = '✅ ' + d.totalKegiatan + ' kegiatan → ' + d.totalSlide + ' slide. Klik untuk download tiap slide:';
+    for (let i = 1; i <= d.totalSlide; i++) {
+      const url = '/api/carousel-slide?slide=' + i + (bulan ? '&bulan=' + encodeURIComponent(bulan) : '');
+      const a = document.createElement('a');
+      a.href = url; a.download = 'carousel-slide-' + i + '.png';
+      a.className = 'btn-gen'; a.style.textAlign = 'center';
+      a.textContent = '⬇️ Download Slide ' + i + ' / ' + d.totalSlide;
+      list.appendChild(a);
+    }
+  } catch (e) { info.textContent = '❌ Gagal menyiapkan carousel.'; }
+}
+function closeCarouselModal() { document.getElementById('carousel-modal').classList.remove('open'); }
+
 async function saveEdit() {
   const id = document.getElementById('edit-id').value;
   const judul = document.getElementById('edit-judul').value;
