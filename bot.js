@@ -828,8 +828,10 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
 .topbar-logo { height: 32px; width: auto; border-radius: 6px; background: white; padding: 2px 6px; }
 .cover { padding: 32px 20px 20px; position: relative; }
 .cover-logo { position: absolute; top: 24px; right: 20px; height: 56px; width: auto; background: white; border-radius: 10px; padding: 6px 10px; box-shadow: 0 4px 14px rgba(0,0,0,0.25); }
-.topbar input { padding: 7px 12px; border-radius: 8px; border: none; font-family:'Nunito',sans-serif; font-size: 0.88rem; background: rgba(255,255,255,0.15); color: white; outline: none; }
-.btn-gen { padding: 8px 18px; background: var(--yellow); color: var(--dark); border: none; border-radius: 10px; font-weight: 800; font-size: 0.9rem; cursor: pointer; }
+.topbar input { padding: 7px 12px; border-radius: 8px; border: none; font-family:'Nunito',sans-serif; font-size: 0.88rem; background: rgba(255,255,255,0.18); color: white; outline: none; }
+.topbar input::placeholder { color: rgba(255,255,255,0.85); opacity: 1; }
+.btn-gen { padding: 8px 18px; background: var(--yellow); color: var(--dark); border: none; border-radius: 10px; font-weight: 800; font-size: 0.9rem; cursor: pointer; display:inline-flex; align-items:center; gap:7px; }
+.btn-icon { width: 16px; height: 16px; flex-shrink: 0; }
 .mag-wrap { max-width: 820px; margin: 0 auto; padding: 0 16px 60px; }
 .cover-title { font-family:'Fredoka One',cursive; color:white; font-size:clamp(1.6rem,4vw,2.6rem); }
 .cover-month { font-family:'Fredoka One',cursive; color:var(--yellow); font-size:clamp(3rem,10vw,5.5rem); line-height:1; }
@@ -847,7 +849,7 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
 .card-judul { font-weight:900; font-size:0.95rem; color:var(--yellow); margin-bottom:6px; }
 .card-desc { font-size:0.82rem; color:rgba(255,255,255,0.9); line-height:1.6; }
 .card-actions { margin-top:8px; display:flex; gap:6px; }
-.btn-edit, .btn-del { padding:4px 10px; border-radius:6px; border:none; cursor:pointer; font-size:0.75rem; font-weight:700; }
+.btn-edit, .btn-del { padding:4px 10px; border-radius:6px; border:none; cursor:pointer; font-size:0.75rem; font-weight:700; display:inline-flex; align-items:center; gap:5px; }
 .btn-edit { background:rgba(255,255,255,0.2); color:white; }
 .btn-del { background:rgba(255,100,100,0.35); color:white; }
 .footer-bar { background:var(--yellow); border-radius:14px; padding:12px 20px; text-align:center; font-weight:700; color:var(--dark); margin-top:28px; font-size:0.88rem; }
@@ -860,7 +862,7 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
 .modal input, .modal textarea { width:100%; padding:9px 12px; border:1.5px solid #ddd; border-radius:8px; font-size:0.9rem; margin-bottom:12px; }
 .modal textarea { min-height:100px; }
 .modal-btns { display:flex; gap:10px; justify-content:flex-end; }
-.btn-save { padding:9px 20px; background:var(--tc); color:white; border:none; border-radius:8px; font-weight:800; cursor:pointer; }
+.btn-save { padding:9px 20px; background:var(--tc); color:white; border:none; border-radius:8px; font-weight:800; cursor:pointer; display:inline-flex; align-items:center; gap:7px; }
 .btn-cancel { padding:9px 16px; background:#eee; color:#333; border:none; border-radius:8px; font-weight:800; cursor:pointer; }
 @media(max-width:520px){ .card { flex-direction:column; } .card img, .card-nofoto { width:100%; height:200px; } }
 .lightbox-bg { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:300; align-items:center; justify-content:center; padding:20px; cursor:zoom-out; }
@@ -874,14 +876,14 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
   <h1><img src="${LOGO_URL_PUBLIK}" alt="${ORG_NAMA}" class="topbar-logo"> E-Magazine</h1>
   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
     <input type="text" id="filter-bulan" placeholder="Filter bulan (mis: Juli 2025)" onchange="loadData()">
-    <button class="btn-gen" onclick="openAddModal()">➕ Tambah Kegiatan</button>
-    <button class="btn-gen" onclick="window.print()">🖨️ Print / PDF</button>
-    <button class="btn-gen" onclick="buatCarousel()">📸 Buat Carousel IG</button>
+    <button class="btn-gen" onclick="openAddModal()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Tambah Kegiatan</button>
+    <button class="btn-gen" onclick="window.print()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg> Print / PDF</button>
+    <button class="btn-gen" onclick="buatCarousel()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg> Buat Carousel IG</button>
   </div>
 </div>
 <div class="modal-bg" id="carousel-modal">
   <div class="modal">
-    <h3>📸 Carousel Instagram</h3>
+    <h3>Carousel Instagram</h3>
     <p id="carousel-info" style="color:#444;margin:10px 0;">Menyiapkan slide...</p>
     <div id="carousel-list" style="display:flex;flex-direction:column;gap:8px;max-height:300px;overflow-y:auto;"></div>
     <div class="modal-btns">
@@ -900,7 +902,7 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
 </div>
 <div class="modal-bg" id="add-modal">
   <div class="modal">
-    <h3>➕ Tambah Kegiatan</h3>
+    <h3>Tambah Kegiatan</h3>
     <label>Tanggal</label><input type="date" id="add-tanggal">
     <label>Judul</label><input type="text" id="add-judul" placeholder="Judul kegiatan">
     <label>Deskripsi</label><textarea id="add-desc" placeholder="Deskripsi kegiatan"></textarea>
@@ -908,20 +910,20 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
     <div id="add-foto-preview" style="margin:6px 0 12px;"></div>
     <div class="modal-btns">
       <button class="btn-cancel" onclick="closeAddModal()">Batal</button>
-      <button class="btn-save" id="add-save-btn" onclick="simpanTambah()">💾 Simpan</button>
+      <button class="btn-save" id="add-save-btn" onclick="simpanTambah()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Simpan</button>
     </div>
   </div>
 </div>
 <div class="modal-bg" id="modal">
   <div class="modal">
-    <h3>✏️ Edit Kegiatan</h3>
+    <h3>Edit Kegiatan</h3>
     <input type="hidden" id="edit-id">
     <label>Tanggal</label><input type="date" id="edit-tanggal">
     <label>Judul</label><input type="text" id="edit-judul">
     <label>Deskripsi</label><textarea id="edit-desc"></textarea>
     <div class="modal-btns">
       <button class="btn-cancel" onclick="closeModal()">Batal</button>
-      <button class="btn-save" onclick="saveEdit()">💾 Simpan</button>
+      <button class="btn-save" onclick="saveEdit()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Simpan</button>
     </div>
   </div>
 </div>
@@ -953,7 +955,7 @@ function renderTimeline() {
     const monthYr = item.tanggal?.replace(/^\\d+\\s*/, '') || '';
     const fotoUrl = (item.foto || '').replace(/'/g, '&#39;');
     const fotoHTML = item.foto ? '<img src="'+fotoUrl+'" loading="lazy" onclick="openLightbox(\\''+fotoUrl+'\\')" onerror="this.outerHTML=\\'<div class=&quot;card-nofoto&quot;>📷</div>\\'">' : '<div class="card-nofoto">📷</div>';
-    return '<div class="tl-item"><div class="bubble"><span class="day">'+day+'</span><span class="myr">'+monthYr+'</span></div><div class="card">'+fotoHTML+'<div class="card-body"><div class="card-judul">"'+(item.judul||'Tanpa Judul')+'"</div><div class="card-desc">'+(item.deskripsi||'')+'</div><div class="card-actions"><button class="btn-edit" onclick="openEdit(\\''+item.id+'\\')">✏️ Edit</button><button class="btn-del" onclick="hapus(\\''+item.id+'\\')">🗑️ Hapus</button></div></div></div></div>';
+    return '<div class="tl-item"><div class="bubble"><span class="day">'+day+'</span><span class="myr">'+monthYr+'</span></div><div class="card">'+fotoHTML+'<div class="card-body"><div class="card-judul">"'+(item.judul||'Tanpa Judul')+'"</div><div class="card-desc">'+(item.deskripsi||'')+'</div><div class="card-actions"><button class="btn-edit" onclick="openEdit(\\''+item.id+'\\')"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Edit</button><button class="btn-del" onclick="hapus(\\''+item.id+'\\')"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg> Hapus</button></div></div></div></div>';
   }).join('');
 }
 const NAMA_BULAN_ID = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
@@ -1014,7 +1016,8 @@ async function simpanTambah() {
   const deskripsi = document.getElementById('add-desc').value.trim();
   if (!judul || !deskripsi) { alert('Judul dan deskripsi wajib diisi'); return; }
   const btn = document.getElementById('add-save-btn');
-  btn.disabled = true; btn.textContent = '⏳ Menyimpan...';
+  const btnHtmlAsli = btn.innerHTML;
+  btn.disabled = true; btn.textContent = 'Menyimpan...';
   try {
     const r = await fetch('/api/kegiatan', {
       method: 'POST',
@@ -1025,9 +1028,9 @@ async function simpanTambah() {
     closeAddModal();
     loadData();
   } catch (e) {
-    alert('❌ Gagal menyimpan kegiatan');
+    alert('Gagal menyimpan kegiatan');
   } finally {
-    btn.disabled = false; btn.textContent = '💾 Simpan';
+    btn.disabled = false; btn.innerHTML = btnHtmlAsli;
   }
 }
 
@@ -1037,22 +1040,22 @@ async function buatCarousel() {
   const info = document.getElementById('carousel-info');
   const list = document.getElementById('carousel-list');
   list.innerHTML = '';
-  info.textContent = '⏳ Menyiapkan slide...';
+  info.textContent = 'Menyiapkan slide...';
   modal.classList.add('open');
   try {
     const r = await fetch('/api/carousel-info' + (bulan ? '?bulan=' + encodeURIComponent(bulan) : ''));
     const d = await r.json();
-    if (!d.totalSlide) { info.textContent = '📭 Tidak ada kegiatan untuk dibuatkan carousel.'; return; }
-    info.textContent = '✅ ' + d.totalKegiatan + ' kegiatan → ' + d.totalSlide + ' slide. Klik untuk download tiap slide:';
+    if (!d.totalSlide) { info.textContent = 'Tidak ada kegiatan untuk dibuatkan carousel.'; return; }
+    info.textContent = d.totalKegiatan + ' kegiatan → ' + d.totalSlide + ' slide. Klik untuk download tiap slide:';
     for (let i = 1; i <= d.totalSlide; i++) {
       const url = '/api/carousel-slide?slide=' + i + (bulan ? '&bulan=' + encodeURIComponent(bulan) : '');
       const a = document.createElement('a');
       a.href = url; a.download = 'carousel-slide-' + i + '.png';
-      a.className = 'btn-gen'; a.style.textAlign = 'center';
-      a.textContent = '⬇️ Download Slide ' + i + ' / ' + d.totalSlide;
+      a.className = 'btn-gen'; a.style.justifyContent = 'center';
+      a.innerHTML = '<svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download Slide ' + i + ' / ' + d.totalSlide;
       list.appendChild(a);
     }
-  } catch (e) { info.textContent = '❌ Gagal menyiapkan carousel.'; }
+  } catch (e) { info.textContent = 'Gagal menyiapkan carousel.'; }
 }
 function closeCarouselModal() { document.getElementById('carousel-modal').classList.remove('open'); }
 
