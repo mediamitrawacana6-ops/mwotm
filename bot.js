@@ -884,17 +884,17 @@ async function ambilFotoBase64(item) {
 // ── AI: ringkasan khusus carousel — padat tapi mencakup 5W+1H ─────────────
 // targetKata disesuaikan dari pemanggil berdasarkan berapa banyak kartu berbagi 1 slide,
 // supaya ringkasan tidak terpotong di tengah kalimat saat ruang kartu lebih sempit.
-async function buatRingkasanCarousel(item, targetKata = '25-30 kata, maksimal 2 kalimat pendek') {
+async function buatRingkasanCarousel(item, targetKata = '45-65 kata dalam 1 paragraf utuh') {
   const teksAsli = item.deskripsi || item.judul || '';
   if (!ANTHROPIC_KEY) return teksAsli;
   try {
     const client = new Anthropic({ apiKey: ANTHROPIC_KEY });
     const resp = await client.messages.create({
       model: 'claude-sonnet-4-6',
-      max_tokens: 150,
+      max_tokens: 220,
       messages: [{
         role: 'user',
-        content: `Buat ringkasan kegiatan untuk slide carousel Instagram, MAKSIMAL ${targetKata}, Bahasa Indonesia. Pastikan mencakup unsur 5W+1H sejauh tersedia di teks asli (siapa yang terlibat, apa kegiatannya, kapan ${item.tanggal ? `— gunakan tanggal "${item.tanggal}" jika teks asli tidak menyebutkan tanggal eksplisit` : ''}, di mana, mengapa/tujuannya, bagaimana pelaksanaannya) — padatkan jadi kalimat singkat dan utuh (jangan terpotong di tengah), pilih unsur yang paling penting saja kalau ruang terbatas. Jangan menambah fakta yang tidak ada di teks asli. Langsung tulis ringkasannya saja tanpa kata pengantar atau label:\n\nJudul: "${item.judul || ''}"\nTeks asli: "${teksAsli.slice(0, 600)}"`
+        content: `Buat ringkasan kegiatan untuk slide carousel Instagram dalam bentuk SATU PARAGRAF UTUH (bukan poin-poin), sekitar ${targetKata}, Bahasa Indonesia, gaya jurnalistik singkat seperti pada e-magazine resmi. Sertakan unsur 5W+1H sejauh tersedia di teks asli (siapa yang terlibat, apa kegiatannya, kapan ${item.tanggal ? `— gunakan tanggal "${item.tanggal}" jika teks asli tidak menyebutkan tanggal eksplisit` : ''}, di mana, mengapa/tujuannya, bagaimana pelaksanaannya). Tulis paragraf yang mengalir lengkap dan tidak terpotong di tengah kalimat — usahakan memenuhi target panjang kata di atas agar paragraf terasa penuh dan informatif, bukan cuma satu kalimat pendek. Jangan menambah fakta yang tidak ada di teks asli. Langsung tulis paragrafnya saja tanpa kata pengantar, label, atau tanda kutip:\n\nJudul: "${item.judul || ''}"\nTeks asli: "${teksAsli.slice(0, 900)}"`
       }]
     });
     return resp.content[0].text.trim();
@@ -927,6 +927,60 @@ function linesToTspans(lines, x, y, lineHeight) {
   return lines.map((line, i) => `<tspan x="${x}" y="${y + i * lineHeight}">${escapeXml(line)}</tspan>`).join('');
 }
 
+// Sama seperti linesToTspans, tapi tiap baris (kecuali baris terakhir) "dipaksa" merentang
+// penuh sampai lebar kotak (textLength + lengthAdjust) supaya hasilnya rata kiri-kanan (justified),
+// meniru tampilan paragraf rapi di halaman web (mwotm.mitrawacana.or.id).
+function linesToTspansJustified(lines, x, y, lineHeight, widthPx) {
+  return lines.map((line, i) => {
+    const isLast = i === lines.length - 1;
+    // Baris terakhir & baris yang cuma 1 kata tidak dipaksa rata (supaya tidak merenggang aneh)
+    const bolehJustify = !isLast && line.trim().includes(' ');
+    const attrs = bolehJustify ? ` textLength="${widthPx}" lengthAdjust="spacingAndGlyphs"` : '';
+    return `<tspan x="${x}" y="${y + i * lineHeight}"${attrs}>${escapeXml(line)}</tspan>`;
+  }).join('');
+}
+
+// Cari paragraf yang MEMENUHI kotak kartu: coba font terbesar dulu, makin kecil sampai
+// seluruh teks (tanpa terpotong) muat dalam batas lebar & tinggi yang tersedia.
+// Hasilnya: font sebesar mungkin yang masih pas → teks terasa "penuh" sampai batas kotak,
+// bukan cuma 1-2 baris pendek yang menyisakan ruang kosong di bawah.
+function fitParagraphToBox(text, widthPx, heightPx, maxFontSize, minFontSize, lineHeightRatio = 1.28) {
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  let best = null;
+  for (let fontSize = maxFontSize; fontSize >= minFontSize; fontSize -= 0.5) {
+    const avgCharW = fontSize * 0.52; // estimasi lebar rata-rata karakter untuk Nunito
+    const maxCharsPerLine = Math.max(8, Math.floor(widthPx / avgCharW));
+    const lineHeight = Math.round(fontSize * lineHeightRatio);
+    const maxLines = Math.max(1, Math.floor(heightPx / lineHeight));
+
+    // Coba bungkus SELURUH teks (tanpa batas baris) untuk lihat apakah muat dalam maxLines
+    const lines = [];
+    let current = '';
+    for (const w of words) {
+      const test = current ? current + ' ' + w : w;
+      if (test.length > maxCharsPerLine && current) { lines.push(current); current = w; }
+      else current = test;
+    }
+    if (current) lines.push(current);
+
+    if (lines.length <= maxLines) {
+      // Cocok tanpa terpotong — ini font terbesar yang pas, pakai ini.
+      best = { fontSize, lineHeight, lines, maxCharsPerLine, truncated: false };
+      break;
+    }
+    // Simpan kandidat fallback (terpotong) seandainya sampai minFontSize pun tetap tidak muat
+    const cut = lines.slice(0, maxLines);
+    const lastIdx = cut.length - 1;
+    if (cut[lastIdx] && cut[lastIdx].length > maxCharsPerLine - 1) {
+      cut[lastIdx] = cut[lastIdx].slice(0, maxCharsPerLine - 1).trim() + '…';
+    } else if (cut[lastIdx]) {
+      cut[lastIdx] = cut[lastIdx].trim() + '…';
+    }
+    best = { fontSize, lineHeight, lines: cut, maxCharsPerLine, truncated: true };
+  }
+  return best || { fontSize: minFontSize, lineHeight: Math.round(minFontSize * lineHeightRatio), lines: [], maxCharsPerLine: 10, truncated: false };
+}
+
 async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
   const W = 1080, H = 1080;
   const tcDark = darkenHex(TEMA_WARNA, 0.55);
@@ -939,7 +993,7 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
   const fotoData = await Promise.all(items.map(ambilFotoBase64));
   // Slide dengan lebih banyak kartu (ruang lebih sempit) → minta ringkasan AI lebih singkat
   // supaya tidak terpotong di tengah kalimat.
-  const targetKata = items.length >= 3 ? '15-18 kata, 1 kalimat singkat dan utuh' : '25-30 kata, maksimal 2 kalimat pendek';
+  const targetKata = items.length >= 3 ? '40-55 kata dalam 1 paragraf utuh' : '55-75 kata dalam 1 paragraf utuh';
   const ringkasanData = await Promise.all(items.map(it => buatRingkasanCarousel(it, targetKata)));
 
   // Ukuran font & jumlah baris judul menyesuaikan kepadatan slide
@@ -963,9 +1017,21 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
     const fotoY = y + (cardH - fotoSize) / 2;
 
     const judulLines = wrapToLines(item.judul || 'Tanpa Judul', textMaxChars, maxJudulLines);
-    // Deskripsi bisa beberapa baris, dibatasi oleh tinggi kartu yang tersedia
-    const maxDeskLines = Math.max(1, Math.min(8, Math.floor((cardH - 40 - 26 - judulLines.length * judulLineH - 24) / deskLineH)));
-    const deskLines = wrapToLines(ringkasanData[i] || item.deskripsi || '', textMaxChars, maxDeskLines);
+
+    // Sisa tinggi kartu yang tersedia untuk paragraf deskripsi (setelah tanggal + judul + margin atas/bawah)
+    const sisaTinggiDesk = cardH - 40 - 26 - judulLines.length * judulLineH - 24;
+    // Cari font terbesar yang membuat paragraf MUAT PENUH (tanpa terpotong) di ruang yang tersisa —
+    // supaya teks mengisi kotak kartu sampai batas bawah, bukan menyisakan ruang kosong.
+    const fit = fitParagraphToBox(
+      ringkasanData[i] || item.deskripsi || '',
+      textAvailPx,
+      Math.max(deskFontSize * 1.28, sisaTinggiDesk),
+      kompak ? 18 : 20,   // font maksimum dicoba
+      11                  // font minimum sebelum terpaksa dipotong
+    );
+    const deskLines = fit.lines;
+    const deskLineH = fit.lineHeight;
+    const deskFontSizeAktual = fit.fontSize;
 
     // Tinggi total blok teks (tanggal + judul + jarak + deskripsi), untuk dipusatkan vertikal dalam kartu
     const blokTinggi = 26 + 14 + judulLines.length * judulLineH + 14 + deskLines.length * deskLineH;
@@ -985,7 +1051,7 @@ async function buatSlideSvg(items, slideKe, totalSlide, bulanLabel) {
     }
     <text x="${textX}" y="${tanggalY}" font-family="Nunito, sans-serif" font-size="22" font-weight="800" fill="#f5c842">${escapeXml(item.tanggal || '')}</text>
     <text font-family="Nunito, sans-serif" font-size="${judulFontSize}" font-weight="800" fill="white">${linesToTspans(judulLines, textX, judulY, judulLineH)}</text>
-    <text font-family="Nunito, sans-serif" font-size="${deskFontSize}" fill="rgba(255,255,255,0.85)">${linesToTspans(deskLines, textX, deskY, deskLineH)}</text>
+    <text font-family="Nunito, sans-serif" font-size="${deskFontSizeAktual}" fill="rgba(255,255,255,0.85)">${linesToTspansJustified(deskLines, textX, deskY, deskLineH, textAvailPx)}</text>
     `;
   });
 
