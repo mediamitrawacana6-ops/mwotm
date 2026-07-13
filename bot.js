@@ -17,7 +17,13 @@ const FOOTER_SOCMED    = process.env.FOOTER_SOCMED || '';
 const FONNTE_TOKEN     = process.env.FONNTE_TOKEN || '';
 const ANTHROPIC_KEY    = process.env.ANTHROPIC_API_KEY || '';
 const GDRIVE_FOLDER_ID = process.env.GDRIVE_FOLDER_ID || '';
-const GOOGLE_SA_JSON   = process.env.GOOGLE_SERVICE_ACCOUNT_JSON || ''; // isi JSON service account (string)
+// OAuth2 delegation ke akun Gmail pribadi (BUKAN service account).
+// Service account tidak bisa dipakai untuk upload karena tidak punya storage quota
+// sendiri, dan Shared Drive tidak tersedia untuk akun Gmail biasa (bukan Workspace).
+// Ketiga nilai ini didapat dari proses satu-kali di get-refresh-token.js.
+const GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+const GOOGLE_REFRESH_TOKEN = process.env.GOOGLE_REFRESH_TOKEN || '';
 const WEBSITE_BASE_URL = process.env.WEBSITE_BASE_URL || 'https://mitrawacana.or.id'; // sumber sinkronisasi berita kegiatan
 const WEBSITE_KATEGORI_SLUG = process.env.WEBSITE_KATEGORI_SLUG || 'berita'; // hanya ambil dari kategori ini
 
@@ -54,26 +60,23 @@ let driveClient = null;
 
 function getDrive() {
   if (driveClient) return driveClient;
-  if (!GOOGLE_SA_JSON) {
-    console.warn('⚠️  GOOGLE_SERVICE_ACCOUNT_JSON belum diisi — fitur foto tidak akan berfungsi.');
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REFRESH_TOKEN) {
+    console.warn('⚠️  GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REFRESH_TOKEN belum diisi — fitur foto tidak akan berfungsi.');
     return null;
   }
   try {
-    const credentials = JSON.parse(GOOGLE_SA_JSON);
-    const auth = new google.auth.GoogleAuth({
-      credentials,
-      // Scope penuh "drive" diperlukan karena file backup di-share manual oleh admin
-      // (bukan dibuat sendiri oleh service account). Scope "drive.file" yang lebih sempit
-      // hanya mengizinkan akses ke file yang dibuat oleh app itu sendiri, walau status
-      // share-nya sudah "Editor" — makanya backup gagal sebelumnya.
-      scopes: [
-        'https://www.googleapis.com/auth/drive',
-      ],
-    });
-    driveClient = google.drive({ version: 'v3', auth });
+    // OAuth2 sebagai akun Gmail pribadi (pemilik folder), bukan service account.
+    // Service account tidak punya storage quota sendiri, jadi upload file baru
+    // selalu gagal dengan error "Service Accounts do not have storage quota"
+    // walau folder sudah di-share sebagai Editor ke service account.
+    // Dengan OAuth2 delegation, upload dilakukan atas nama akun asli sehingga
+    // memakai kuota penyimpanan akun itu sendiri.
+    const oauth2Client = new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET);
+    oauth2Client.setCredentials({ refresh_token: GOOGLE_REFRESH_TOKEN });
+    driveClient = google.drive({ version: 'v3', auth: oauth2Client });
     return driveClient;
   } catch (e) {
-    console.error('❌ Gagal parse GOOGLE_SERVICE_ACCOUNT_JSON:', e.message);
+    console.error('❌ Gagal setup OAuth2 Google Drive:', e.message);
     return null;
   }
 }
@@ -717,6 +720,7 @@ app.post('/api/kegiatan', async (req, res) => {
     const timestamp = Math.floor(tanggalDate.getTime() / 1000);
 
     let driveResult = null;
+    let fotoGagal = false;
     if (fotoBase64) {
       const matches = fotoBase64.match(/^data:(image\/\w+);base64,(.+)$/);
       const mimeType = matches ? matches[1] : 'image/jpeg';
@@ -724,6 +728,9 @@ app.post('/api/kegiatan', async (req, res) => {
       const buffer = Buffer.from(base64Data, 'base64');
       const ext = mimeType.split('/')[1] || 'jpg';
       driveResult = await uploadKeDrive(buffer, `kegiatan_${Date.now()}.${ext}`, mimeType);
+      // Kegiatan tetap disimpan walau upload foto gagal, tapi beri tahu
+      // frontend supaya user tahu fotonya tidak masuk (bukan gagal senyap).
+      if (!driveResult) fotoGagal = true;
     }
 
     const data = loadData();
@@ -738,7 +745,7 @@ app.post('/api/kegiatan', async (req, res) => {
       sumber: 'manual',
     });
     saveData(data);
-    res.json({ ok: true });
+    res.json({ ok: true, fotoGagal });
   } catch (e) {
     console.error('❌ Gagal tambah kegiatan manual:', e.message);
     res.status(500).json({ error: 'Gagal menambahkan kegiatan' });
@@ -1400,8 +1407,10 @@ async function simpanTambah() {
       body: JSON.stringify({ tanggalISO, judul, deskripsi, fotoBase64: addFotoBase64 })
     });
     if (!r.ok) throw new Error('gagal');
+    const hasil = await r.json();
     closeAddModal();
     loadData();
+    if (hasil.fotoGagal) alert('Kegiatan tersimpan, tapi foto gagal diupload ke Google Drive. Cek koneksi Drive lalu coba edit kegiatan untuk menambahkan foto lagi.');
   } catch (e) {
     alert('Gagal menyimpan kegiatan');
   } finally {
