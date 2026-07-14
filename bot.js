@@ -383,14 +383,20 @@ async function rapikanDeskripsi(teksMentah) {
 }
 
 // ── AI: buat "Output", "Deskripsi Singkat" (1 paragraf), dan klasifikasi "Divisi" ──
-// Dibuat 1 kali panggilan batch untuk semua kegiatan terpilih (lebih hemat & konsisten
-// formatnya daripada memanggil AI satu-satu per kegiatan).
+// Dipecah per-batch (bukan 1 panggilan untuk semua kegiatan) supaya output JSON
+// tidak terpotong saat jumlah kegiatan banyak — itu penyebab utama Output selalu "-"
+// pada versi sebelumnya (batch tunggal + max_tokens tetap 4000 bisa membuat JSON
+// terpotong sebelum kurung tutup, sehingga JSON.parse gagal dan SEMUA field, termasuk
+// Output, jatuh ke fallback).
 const DAFTAR_DIVISI = [
   'Divisi Keuangan',
   'Divisi Penelitian dan Advokasi',
   'Divisi Media & Pengelolaan Pengetahuan',
   'Divisi Pendidikan & Pengorganisasian Masyarakat',
 ];
+
+const UKURAN_BATCH_HIGHLIGHT = 6; // jumlah kegiatan per panggilan AI — aman dari potongan JSON
+
 async function buatHighlightUntukTabel(items) {
   // items: [{ judul, deskripsi }]  ->  [{ output, deskripsiSingkat, divisi }]
   const fallback = items.map(it => ({
@@ -399,46 +405,70 @@ async function buatHighlightUntukTabel(items) {
     divisi: DAFTAR_DIVISI[3], // default paling umum kalau AI tidak tersedia
   }));
   if (!ANTHROPIC_KEY || !items.length) return fallback;
-  try {
-    const client = new Anthropic({ apiKey: ANTHROPIC_KEY });
-    const daftar = items.map((it, i) => `${i + 1}. Judul: "${it.judul}"\nDeskripsi: "${(it.deskripsi || '').slice(0, 600)}"`).join('\n\n');
-    const resp = await client.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 4000,
-      messages: [{
-        role: 'user',
-        content: `Untuk setiap kegiatan organisasi berikut, buatkan tiga hal dalam Bahasa Indonesia:
 
-1. "output": hasil/capaian konkret dari kegiatan itu, maksimal 8 kata (contoh: "50 remaja teredukasi bahaya pornografi", "MoU pendampingan lembaga tercapai"). Kalau tidak ada hasil eksplisit yang disebutkan di deskripsi, buat berdasarkan tujuan kegiatan tersebut.
+  const hasilAkhir = new Array(items.length);
+  const client = new Anthropic({ apiKey: ANTHROPIC_KEY });
 
-2. "deskripsiSingkat": ringkasan dalam bentuk 1 paragraf utuh (2-3 kalimat mengalir, BUKAN poin-poin atau daftar) yang merangkum inti kegiatan tersebut.
+  for (let awal = 0; awal < items.length; awal += UKURAN_BATCH_HIGHLIGHT) {
+    const batch = items.slice(awal, awal + UKURAN_BATCH_HIGHLIGHT);
+    const batchFallback = fallback.slice(awal, awal + UKURAN_BATCH_HIGHLIGHT);
 
-3. "divisi": klasifikasikan kegiatan ini ke SATU divisi yang paling sesuai, pilih PERSIS salah satu dari daftar berikut (salin teksnya persis, jangan diubah):
-   - "Divisi Keuangan" — kegiatan terkait pendanaan, financial planning, sustainability keuangan, laporan/audit keuangan, penggalangan dana.
-   - "Divisi Penelitian dan Advokasi" — riset, kajian, advokasi kebijakan, audiensi dengan DPRD/pemerintah, pemantauan regulasi.
+    try {
+      const daftar = batch.map((it, i) => `${i + 1}. Judul: "${it.judul}"\nDeskripsi: "${(it.deskripsi || '').slice(0, 600)}"`).join('\n\n');
+      const resp = await client.messages.create({
+        model: 'claude-sonnet-4-6',
+        max_tokens: Math.min(8000, 600 + batch.length * 400), // cukup lega per item, tidak akan terpotong
+        messages: [{
+          role: 'user',
+          content: `Untuk setiap kegiatan organisasi berikut, buatkan tiga hal dalam Bahasa Indonesia:
+
+1. "output": hasil/capaian konkret dari kegiatan itu, maksimal 8 kata (contoh: "50 remaja teredukasi bahaya pornografi", "MoU pendampingan lembaga tercapai"). WAJIB DIISI — jangan pernah kosong atau "-". Kalau tidak ada hasil eksplisit disebutkan, buat berdasarkan tujuan kegiatan tersebut.
+
+2. "deskripsiSingkat": ringkasan 1 paragraf utuh (2-3 kalimat mengalir, BUKAN poin-poin) yang merangkum inti kegiatan tersebut.
+
+3. "divisi": klasifikasikan ke SATU divisi, pilih PERSIS salah satu (salin teksnya persis):
+   - "Divisi Keuangan" — pendanaan, financial planning, laporan/audit keuangan, penggalangan dana.
+   - "Divisi Penelitian dan Advokasi" — riset, kajian, advokasi kebijakan, audiensi DPRD/pemerintah, pemantauan regulasi.
    - "Divisi Media & Pengelolaan Pengetahuan" — publikasi, media, webinar, dokumentasi, pengelolaan pengetahuan/informasi, media sosial.
    - "Divisi Pendidikan & Pengorganisasian Masyarakat" — edukasi, sosialisasi, pelatihan masyarakat/komunitas, pendampingan lembaga/kelompok masyarakat, pengorganisasian warga.
-   Kalau ambigu, pilih divisi yang isi kegiatannya PALING dominan.
+   Kalau ambigu, pilih yang isi kegiatannya PALING dominan.
 
 Daftar kegiatan:
 ${daftar}
 
-Jawab HANYA dengan JSON array (tanpa markdown code block, tanpa penjelasan tambahan), urutan dan jumlah entri HARUS SAMA PERSIS dengan daftar kegiatan di atas, format:
+Jawab HANYA dengan JSON array murni, TANPA markdown code block, TANPA teks pembuka/penutup apa pun. Jumlah entri HARUS SAMA PERSIS dengan jumlah kegiatan di atas (${batch.length} entri), urutan sesuai nomor, format:
 [{"output": "...", "deskripsiSingkat": "...", "divisi": "..."}, ...]`
-      }]
-    });
-    const teksJson = resp.content[0].text.trim().replace(/^```json\s*|```\s*$/g, '').trim();
-    const hasil = JSON.parse(teksJson);
-    if (!Array.isArray(hasil) || hasil.length !== items.length) return fallback;
-    return hasil.map((h, i) => ({
-      output: (h.output || fallback[i].output || '-').toString().trim(),
-      deskripsiSingkat: (h.deskripsiSingkat || fallback[i].deskripsiSingkat || '').toString().trim(),
-      divisi: DAFTAR_DIVISI.includes(h.divisi) ? h.divisi : fallback[i].divisi,
-    }));
-  } catch (e) {
-    console.error('❌ Gagal buat highlight tabel DOCX:', e.message);
-    return fallback;
+        }]
+      });
+
+      const teksMentah = resp.content[0].text.trim();
+      // Ekstrak array JSON walau AI menambahkan teks/markdown di luar instruksi
+      const cocokArray = teksMentah.match(/\[[\s\S]*\]/);
+      const teksJson = cocokArray ? cocokArray[0] : teksMentah.replace(/^```json\s*|```\s*$/g, '').trim();
+      const hasil = JSON.parse(teksJson);
+
+      if (!Array.isArray(hasil) || hasil.length !== batch.length) {
+        console.error(`⚠️  Highlight batch [${awal}-${awal + batch.length}]: jumlah entri tidak cocok (dapat ${Array.isArray(hasil) ? hasil.length : 'bukan array'}, harusnya ${batch.length}). Pakai fallback untuk batch ini.`);
+        for (let i = 0; i < batch.length; i++) hasilAkhir[awal + i] = batchFallback[i];
+        continue;
+      }
+
+      for (let i = 0; i < batch.length; i++) {
+        const h = hasil[i] || {};
+        hasilAkhir[awal + i] = {
+          output: (h.output && String(h.output).trim()) || batchFallback[i].output,
+          deskripsiSingkat: (h.deskripsiSingkat && String(h.deskripsiSingkat).trim()) || batchFallback[i].deskripsiSingkat,
+          divisi: DAFTAR_DIVISI.includes(h.divisi) ? h.divisi : batchFallback[i].divisi,
+        };
+      }
+    } catch (e) {
+      // Log detail supaya kalau gagal lagi, penyebabnya kelihatan di log Render (bukan cuma "-" misterius)
+      console.error(`❌ Gagal buat highlight batch [${awal}-${awal + batch.length}]:`, e.message);
+      for (let i = 0; i < batch.length; i++) hasilAkhir[awal + i] = batchFallback[i];
+    }
   }
+
+  return hasilAkhir;
 }
 
 // ── DOCX: bangun tabel ringkasan (No | Tanggal | Output | Kegiatan | Deskripsi Singkat) ──
