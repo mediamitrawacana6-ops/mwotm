@@ -382,14 +382,21 @@ async function rapikanDeskripsi(teksMentah) {
   }
 }
 
-// ── AI: buat "Output" (hasil konkret) + "Deskripsi Singkat" untuk tabel ringkasan DOCX ──
+// ── AI: buat "Output", "Deskripsi Singkat" (1 paragraf), dan klasifikasi "Divisi" ──
 // Dibuat 1 kali panggilan batch untuk semua kegiatan terpilih (lebih hemat & konsisten
 // formatnya daripada memanggil AI satu-satu per kegiatan).
+const DAFTAR_DIVISI = [
+  'Divisi Keuangan',
+  'Divisi Penelitian dan Advokasi',
+  'Divisi Media & Pengelolaan Pengetahuan',
+  'Divisi Pendidikan & Pengorganisasian Masyarakat',
+];
 async function buatHighlightUntukTabel(items) {
-  // items: [{ judul, deskripsi }]  ->  [{ output, deskripsiSingkat }]
+  // items: [{ judul, deskripsi }]  ->  [{ output, deskripsiSingkat, divisi }]
   const fallback = items.map(it => ({
     output: '-',
-    deskripsiSingkat: (it.deskripsi || '').split(/(?<=[.!?])\s+/).slice(0, 2).join(' ').slice(0, 200),
+    deskripsiSingkat: (it.deskripsi || '').slice(0, 300),
+    divisi: DAFTAR_DIVISI[3], // default paling umum kalau AI tidak tersedia
   }));
   if (!ANTHROPIC_KEY || !items.length) return fallback;
   try {
@@ -400,7 +407,24 @@ async function buatHighlightUntukTabel(items) {
       max_tokens: 4000,
       messages: [{
         role: 'user',
-        content: `Untuk setiap kegiatan organisasi berikut, buatkan dua hal dalam Bahasa Indonesia:\n1. "output": hasil/capaian konkret dari kegiatan itu, maksimal 8 kata (contoh: "50 remaja teredukasi bahaya pornografi", "MoU pendampingan lembaga tercapai"). Kalau tidak ada hasil eksplisit yang disebutkan di deskripsi, buat berdasarkan tujuan kegiatan tersebut.\n2. "deskripsiSingkat": ringkasan singkat 1 kalimat (maksimal 20 kata) dari deskripsi kegiatan tersebut.\n\nDaftar kegiatan:\n${daftar}\n\nJawab HANYA dengan JSON array (tanpa markdown code block, tanpa penjelasan tambahan), urutan dan jumlah entri HARUS SAMA PERSIS dengan daftar kegiatan di atas, format:\n[{"output": "...", "deskripsiSingkat": "..."}, ...]`
+        content: `Untuk setiap kegiatan organisasi berikut, buatkan tiga hal dalam Bahasa Indonesia:
+
+1. "output": hasil/capaian konkret dari kegiatan itu, maksimal 8 kata (contoh: "50 remaja teredukasi bahaya pornografi", "MoU pendampingan lembaga tercapai"). Kalau tidak ada hasil eksplisit yang disebutkan di deskripsi, buat berdasarkan tujuan kegiatan tersebut.
+
+2. "deskripsiSingkat": ringkasan dalam bentuk 1 paragraf utuh (2-3 kalimat mengalir, BUKAN poin-poin atau daftar) yang merangkum inti kegiatan tersebut.
+
+3. "divisi": klasifikasikan kegiatan ini ke SATU divisi yang paling sesuai, pilih PERSIS salah satu dari daftar berikut (salin teksnya persis, jangan diubah):
+   - "Divisi Keuangan" — kegiatan terkait pendanaan, financial planning, sustainability keuangan, laporan/audit keuangan, penggalangan dana.
+   - "Divisi Penelitian dan Advokasi" — riset, kajian, advokasi kebijakan, audiensi dengan DPRD/pemerintah, pemantauan regulasi.
+   - "Divisi Media & Pengelolaan Pengetahuan" — publikasi, media, webinar, dokumentasi, pengelolaan pengetahuan/informasi, media sosial.
+   - "Divisi Pendidikan & Pengorganisasian Masyarakat" — edukasi, sosialisasi, pelatihan masyarakat/komunitas, pendampingan lembaga/kelompok masyarakat, pengorganisasian warga.
+   Kalau ambigu, pilih divisi yang isi kegiatannya PALING dominan.
+
+Daftar kegiatan:
+${daftar}
+
+Jawab HANYA dengan JSON array (tanpa markdown code block, tanpa penjelasan tambahan), urutan dan jumlah entri HARUS SAMA PERSIS dengan daftar kegiatan di atas, format:
+[{"output": "...", "deskripsiSingkat": "...", "divisi": "..."}, ...]`
       }]
     });
     const teksJson = resp.content[0].text.trim().replace(/^```json\s*|```\s*$/g, '').trim();
@@ -409,6 +433,7 @@ async function buatHighlightUntukTabel(items) {
     return hasil.map((h, i) => ({
       output: (h.output || fallback[i].output || '-').toString().trim(),
       deskripsiSingkat: (h.deskripsiSingkat || fallback[i].deskripsiSingkat || '').toString().trim(),
+      divisi: DAFTAR_DIVISI.includes(h.divisi) ? h.divisi : fallback[i].divisi,
     }));
   } catch (e) {
     console.error('❌ Gagal buat highlight tabel DOCX:', e.message);
@@ -416,11 +441,11 @@ async function buatHighlightUntukTabel(items) {
   }
 }
 
-// ── DOCX: bangun tabel ringkasan (Output | Kegiatan | Deskripsi Singkat) ──
+// ── DOCX: bangun tabel ringkasan (No | Tanggal | Output | Kegiatan | Deskripsi Singkat) ──
 function buatTabelHighlightDocx(baris) {
   const warnaUtama = (TEMA_WARNA || '#a6174d').replace('#', '').toUpperCase();
   const warnaAbu = 'F2F2F2';
-  const lebarKolom = [2500, 3200, 3800]; // total 9500 DXA, dual width (kolom + sel) sesuai gotcha docx-js
+  const lebarKolom = [500, 1400, 2000, 2400, 3200]; // total 9500 DXA, dual width sesuai gotcha docx-js
   const lebarTabel = lebarKolom.reduce((a, b) => a + b, 0);
 
   const headerCell = (teks, width) => new TableCell({
@@ -442,17 +467,21 @@ function buatTabelHighlightDocx(baris) {
   const headerRow = new TableRow({
     tableHeader: true,
     children: [
-      headerCell('Output', lebarKolom[0]),
-      headerCell('Kegiatan', lebarKolom[1]),
-      headerCell('Deskripsi Singkat', lebarKolom[2]),
+      headerCell('No', lebarKolom[0]),
+      headerCell('Tanggal', lebarKolom[1]),
+      headerCell('Output', lebarKolom[2]),
+      headerCell('Kegiatan', lebarKolom[3]),
+      headerCell('Deskripsi Singkat', lebarKolom[4]),
     ],
   });
 
   const bodyRows = baris.map((item, i) => new TableRow({
     children: [
-      bodyCell(item.output, lebarKolom[0], i % 2 === 1),
-      bodyCell(item.kegiatan, lebarKolom[1], i % 2 === 1),
-      bodyCell(item.deskripsiSingkat, lebarKolom[2], i % 2 === 1),
+      bodyCell(String(item.no), lebarKolom[0], i % 2 === 1),
+      bodyCell(item.tanggal, lebarKolom[1], i % 2 === 1),
+      bodyCell(item.output, lebarKolom[2], i % 2 === 1),
+      bodyCell(item.kegiatan, lebarKolom[3], i % 2 === 1),
+      bodyCell(item.deskripsiSingkat, lebarKolom[4], i % 2 === 1),
     ],
   }));
 
@@ -471,17 +500,51 @@ function buatTabelHighlightDocx(baris) {
   });
 }
 
-// ── DOCX: rakit dokumen ringkasan lengkap dari daftar kegiatan terpilih ──
+// ── DOCX: rakit dokumen ringkasan lengkap, dikelompokkan otomatis per divisi ──
 async function buatDocxRingkasan(kegiatanTerpilih, labelPeriode) {
   const warnaUtama = (TEMA_WARNA || '#a6174d').replace('#', '').toUpperCase();
   const highlight = await buatHighlightUntukTabel(
     kegiatanTerpilih.map(k => ({ judul: k.judul, deskripsi: k.deskripsi }))
   );
   const baris = kegiatanTerpilih.map((k, i) => ({
+    tanggal: k.tanggal || '-',
     output: highlight[i].output,
     kegiatan: k.judul || 'Tanpa Judul',
     deskripsiSingkat: highlight[i].deskripsiSingkat,
+    divisi: highlight[i].divisi,
   }));
+
+  // Kelompokkan per divisi mengikuti urutan tetap di DAFTAR_DIVISI; divisi yang
+  // tidak dikenali (di luar 4 daftar resmi) dikumpulkan di grup "Lainnya" di akhir.
+  const grupPerDivisi = new Map();
+  [...DAFTAR_DIVISI, 'Lainnya'].forEach(d => grupPerDivisi.set(d, []));
+  baris.forEach(b => {
+    const key = grupPerDivisi.has(b.divisi) ? b.divisi : 'Lainnya';
+    grupPerDivisi.get(key).push(b);
+  });
+
+  const kontenDokumen = [
+    new Paragraph({
+      heading: HeadingLevel.HEADING_1,
+      children: [new TextRun({ text: `Ringkasan Kegiatan — ${ORG_NAMA}`, bold: true, color: warnaUtama, size: 32 })],
+    }),
+    new Paragraph({
+      spacing: { after: 300 },
+      children: [new TextRun({ text: labelPeriode, italics: true, size: 22, color: '555555' })],
+    }),
+  ];
+
+  let nomorGlobal = 1;
+  for (const [namaDivisi, itemDivisi] of grupPerDivisi) {
+    if (!itemDivisi.length) continue; // lewati divisi yang tidak ada kegiatannya
+    const barisBernomor = itemDivisi.map(item => ({ ...item, no: nomorGlobal++ }));
+    kontenDokumen.push(new Paragraph({
+      heading: HeadingLevel.HEADING_2,
+      spacing: { before: 300, after: 150 },
+      children: [new TextRun({ text: `${namaDivisi} (${itemDivisi.length} kegiatan)`, bold: true, color: warnaUtama, size: 26 })],
+    }));
+    kontenDokumen.push(buatTabelHighlightDocx(barisBernomor));
+  }
 
   const doc = new DocxDocument({
     sections: [{
@@ -491,17 +554,7 @@ async function buatDocxRingkasan(kegiatanTerpilih, labelPeriode) {
           margin: { top: 1000, bottom: 1000, left: 900, right: 900 },
         },
       },
-      children: [
-        new Paragraph({
-          heading: HeadingLevel.HEADING_1,
-          children: [new TextRun({ text: `Ringkasan Kegiatan — ${ORG_NAMA}`, bold: true, color: warnaUtama, size: 32 })],
-        }),
-        new Paragraph({
-          spacing: { after: 300 },
-          children: [new TextRun({ text: labelPeriode, italics: true, size: 22, color: '555555' })],
-        }),
-        buatTabelHighlightDocx(baris),
-      ],
+      children: kontenDokumen,
     }],
   });
 
