@@ -395,6 +395,44 @@ const DAFTAR_DIVISI = [
   'Divisi Pendidikan & Pengorganisasian Masyarakat',
 ];
 
+// ── Hashtag divisi untuk input WA ─────────────────────────
+// Pengguna bisa menambahkan salah satu tagar berikut di pesan WA (bersamaan dengan
+// #kegiatan / #rekap, atau di caption foto) untuk menentukan divisi secara manual,
+// tanpa perlu menunggu klasifikasi otomatis oleh AI saat export DOCX.
+// Contoh: "Pelatihan pencegahan TPPO di Kalidengen #kegiatan #pendidikan"
+const DIVISI_HASHTAG_MAP = {
+  keuangan: 'Divisi Keuangan',
+  finance: 'Divisi Keuangan',
+  penelitian: 'Divisi Penelitian dan Advokasi',
+  riset: 'Divisi Penelitian dan Advokasi',
+  advokasi: 'Divisi Penelitian dan Advokasi',
+  media: 'Divisi Media & Pengelolaan Pengetahuan',
+  pengetahuan: 'Divisi Media & Pengelolaan Pengetahuan',
+  publikasi: 'Divisi Media & Pengelolaan Pengetahuan',
+  pendidikan: 'Divisi Pendidikan & Pengorganisasian Masyarakat',
+  pengorganisasian: 'Divisi Pendidikan & Pengorganisasian Masyarakat',
+  masyarakat: 'Divisi Pendidikan & Pengorganisasian Masyarakat',
+};
+
+// Deteksi tagar divisi di dalam teks bebas, keluarkan tagar tsb dari teks, dan
+// kembalikan nama divisi resminya (atau null kalau tidak ada tagar divisi yang cocok).
+function deteksiDivisiDiTeksServer(teks) {
+  if (!teks) return { divisi: null, teksBersih: teks };
+  let divisiTerdeteksi = null;
+  const teksBersih = teks
+    .replace(/#(\w+)/g, (match, tag) => {
+      const key = tag.toLowerCase();
+      if (!divisiTerdeteksi && DIVISI_HASHTAG_MAP[key]) {
+        divisiTerdeteksi = DIVISI_HASHTAG_MAP[key];
+        return '';
+      }
+      return match; // biarkan tagar lain (mis. #kegiatan/#rekap) apa adanya, dibersihkan di tempat lain
+    })
+    .replace(/\s+/g, ' ')
+    .trim();
+  return { divisi: divisiTerdeteksi, teksBersih };
+}
+
 const UKURAN_BATCH_HIGHLIGHT = 6; // jumlah kegiatan per panggilan AI — aman dari potongan JSON
 
 async function buatHighlightUntukTabel(items) {
@@ -541,7 +579,9 @@ async function buatDocxRingkasan(kegiatanTerpilih, labelPeriode) {
     output: highlight[i].output,
     kegiatan: k.judul || 'Tanpa Judul',
     deskripsiSingkat: highlight[i].deskripsiSingkat,
-    divisi: highlight[i].divisi,
+    // Kalau divisi sudah ditentukan manual (dari form web atau tagar WA), pakai itu —
+    // AI hanya dipakai untuk mengisi kegiatan yang belum punya divisi eksplisit.
+    divisi: (k.divisi && DAFTAR_DIVISI.includes(k.divisi)) ? k.divisi : highlight[i].divisi,
   }));
 
   // Kelompokkan per divisi mengikuti urutan tetap di DAFTAR_DIVISI; divisi yang
@@ -650,13 +690,17 @@ app.post('/webhook/fonnte', async (req, res) => {
       const buffer = await downloadMediaFonnte(mediaUrl);
       if (!buffer) return;
 
+      // Deteksi tagar divisi di caption foto (mis. "#pendidikan"), keluarkan dari
+      // teks sebelum dipakai sebagai konteks pembuatan deskripsi AI.
+      const { divisi: divisiTerdeteksi, teksBersih: captionBersih } = deteksiDivisiDiTeksServer(pesanTeks);
+
       const imageBase64 = buffer.toString('base64');
-      const deskripsi    = await buatDeskripsi(imageBase64, pesanTeks);
+      const deskripsi    = await buatDeskripsi(imageBase64, captionBersih);
       const judul        = await ekstrakJudul(deskripsi);
 
       // Deteksi tanggal dari caption WA atau dari deskripsi hasil AI; kalau tidak
       // disebutkan sama sekali, pakai tanggal hari ini pesan diterima.
-      const tanggalTerdeteksi = cariTanggalDiTeksServer(pesanTeks) || cariTanggalDiTeksServer(deskripsi);
+      const tanggalTerdeteksi = cariTanggalDiTeksServer(captionBersih) || cariTanggalDiTeksServer(deskripsi);
       const tanggalDate = tanggalTerdeteksi || new Date();
       const tanggal = formatTanggal(tanggalDate);
       const timestamp = Math.floor(tanggalDate.getTime() / 1000);
@@ -673,19 +717,25 @@ app.post('/webhook/fonnte', async (req, res) => {
         deskripsi,
         foto: driveResult ? driveResult.directUrl : null,
         fotoDriveId: driveResult ? driveResult.fileId : null,
+        divisi: divisiTerdeteksi,
         sumber: 'wa_foto',
       });
       saveData(data);
 
-      await kirimBalasanWA(sender, `✅ Kegiatan "${judul}" (${tanggal}) berhasil disimpan untuk e-magazine!`);
-      console.log(`   ✅ Disimpan: "${judul}" (${tanggal})`);
+      let balasan = `✅ Kegiatan "${judul}" (${tanggal}) berhasil disimpan untuk e-magazine!`;
+      if (divisiTerdeteksi) balasan += `\n🏷️ Divisi: ${divisiTerdeteksi}`;
+      await kirimBalasanWA(sender, balasan);
+      console.log(`   ✅ Disimpan: "${judul}" (${tanggal})${divisiTerdeteksi ? ' [' + divisiTerdeteksi + ']' : ''}`);
     }
 
     // ── Pesan TEKS dengan hashtag — AI cari foto paling relevan dari Drive ──
     else if (pesanTeks && (pesanTeks.toLowerCase().includes('#kegiatan') || pesanTeks.toLowerCase().includes('#rekap'))) {
       console.log('📝 Teks kegiatan masuk...');
 
-      const bersih = pesanTeks.replace(/#kegiatan|#rekap/gi, '').trim();
+      // Deteksi tagar divisi (mis. "#pendidikan", "#advokasi") dan keluarkan dari teks
+      // sebelum tagar #kegiatan/#rekap juga dibersihkan.
+      const { divisi: divisiTerdeteksi, teksBersih: teksSetelahDivisi } = deteksiDivisiDiTeksServer(pesanTeks);
+      const bersih = teksSetelahDivisi.replace(/#kegiatan|#rekap/gi, '').trim();
 
       // Cari foto yang paling relevan dari folder Drive (yang belum dipakai)
       const idFotoTerpakai = loadData()
@@ -722,6 +772,7 @@ app.post('/webhook/fonnte', async (req, res) => {
         deskripsi,
         foto: fotoCocok ? fotoCocok.directUrl : null,
         fotoDriveId: fotoCocok ? fotoCocok.fileId : null,
+        divisi: divisiTerdeteksi,
         sumber: 'wa_teks',
       });
       saveData(data);
@@ -730,8 +781,9 @@ app.post('/webhook/fonnte', async (req, res) => {
       balasan += fotoCocok
         ? `\n📷 Foto otomatis dipasangkan dari folder Drive.`
         : `\n📷 Belum ada foto yang cocok — upload foto ke folder Drive lalu kirim ulang kegiatannya jika perlu.`;
+      if (divisiTerdeteksi) balasan += `\n🏷️ Divisi: ${divisiTerdeteksi}`;
       await kirimBalasanWA(sender, balasan);
-      console.log(`   ✅ Disimpan: "${judul}" (${tanggal})${fotoCocok ? ' (dengan foto)' : ''}`);
+      console.log(`   ✅ Disimpan: "${judul}" (${tanggal})${fotoCocok ? ' (dengan foto)' : ''}${divisiTerdeteksi ? ' [' + divisiTerdeteksi + ']' : ''}`);
     }
 
   } catch (err) {
@@ -900,6 +952,7 @@ async function prosesArtikelJadiKegiatan(artikel) {
     deskripsi,
     foto: artikel.fotoUrl || null,
     fotoDriveId: null,
+    divisi: null,
     sumber: 'website',
     sumberUrl: artikel.sumberUrl,
   };
@@ -993,7 +1046,7 @@ app.get('/api/kegiatan', (req, res) => {
 // ── Tambah kegiatan manual (kustom) — bisa untuk tanggal/bulan apa saja ──
 app.post('/api/kegiatan', async (req, res) => {
   try {
-    const { tanggalISO, judul, deskripsi, fotoBase64 } = req.body;
+    const { tanggalISO, judul, deskripsi, fotoBase64, divisi } = req.body;
     if (!judul || !deskripsi) {
       return res.status(400).json({ error: 'Judul dan deskripsi wajib diisi' });
     }
@@ -1021,6 +1074,10 @@ app.post('/api/kegiatan', async (req, res) => {
       if (!driveResult) fotoGagal = true;
     }
 
+    // Divisi dari form web bersifat opsional — kalau kosong/tidak valid, biarkan null
+    // supaya nanti diklasifikasikan otomatis oleh AI saat export DOCX.
+    const divisiValid = DAFTAR_DIVISI.includes(divisi) ? divisi : null;
+
     const data = loadData();
     data.push({
       id: `${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
@@ -1030,6 +1087,7 @@ app.post('/api/kegiatan', async (req, res) => {
       deskripsi,
       foto: driveResult ? driveResult.directUrl : null,
       fotoDriveId: driveResult ? driveResult.fileId : null,
+      divisi: divisiValid,
       sumber: 'manual',
     });
     saveData(data);
@@ -1062,6 +1120,12 @@ app.put('/api/kegiatan/:id', async (req, res) => {
 
     const { tanggalISO, fotoBase64, ...rest } = req.body;
     const updates = { ...rest };
+
+    // Kalau field divisi ikut dikirim, validasi terhadap daftar resmi — nilai kosong
+    // atau tidak dikenali akan disimpan sebagai null (berarti "otomatis oleh AI").
+    if (Object.prototype.hasOwnProperty.call(updates, 'divisi')) {
+      updates.divisi = DAFTAR_DIVISI.includes(updates.divisi) ? updates.divisi : null;
+    }
 
     if (tanggalISO) {
       const [th, bl, hr] = tanggalISO.split('-').map(Number);
@@ -1527,6 +1591,7 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
 .card-nofoto { width:160px; height:160px; border-radius:10px; background:rgba(255,255,255,0.2); flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:2rem; border:2px dashed rgba(255,255,255,0.4); }
 .card-body { flex:1; }
 .card-judul { font-weight:900; font-size:0.95rem; color:var(--yellow); margin-bottom:6px; }
+.card-divisi { display:inline-block; font-size:0.68rem; font-weight:800; color:var(--dark); background:var(--yellow); border-radius:6px; padding:2px 8px; margin-bottom:6px; }
 .card-desc { font-size:0.82rem; color:rgba(255,255,255,0.9); line-height:1.6; }
 .card-actions { margin-top:8px; display:flex; gap:6px; }
 .btn-edit, .btn-del { padding:4px 10px; border-radius:6px; border:none; cursor:pointer; font-size:0.75rem; font-weight:700; display:inline-flex; align-items:center; gap:5px; }
@@ -1539,7 +1604,7 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
 .modal { background:white; border-radius:16px; padding:24px; max-width:480px; width:90%; }
 .modal h3 { font-weight:800; margin-bottom:14px; color:var(--tc); }
 .modal label { font-size:0.82rem; font-weight:700; color:#555; display:block; margin-bottom:3px; }
-.modal input, .modal textarea { width:100%; padding:9px 12px; border:1.5px solid #ddd; border-radius:8px; font-size:0.9rem; margin-bottom:12px; }
+.modal input, .modal textarea, .modal select { width:100%; padding:9px 12px; border:1.5px solid #ddd; border-radius:8px; font-size:0.9rem; margin-bottom:12px; font-family:'Nunito',sans-serif; }
 .modal textarea { min-height:100px; }
 .modal-btns { display:flex; gap:10px; justify-content:flex-end; }
 .btn-save { padding:9px 20px; background:var(--tc); color:white; border:none; border-radius:8px; font-weight:800; cursor:pointer; display:inline-flex; align-items:center; gap:7px; }
@@ -1624,6 +1689,8 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
     <label>Tanggal</label><input type="date" id="add-tanggal">
     <label>Judul</label><input type="text" id="add-judul" placeholder="Judul kegiatan">
     <label>Deskripsi</label><textarea id="add-desc" placeholder="Deskripsi kegiatan"></textarea>
+    <label>Divisi (opsional)</label>
+    <select id="add-divisi"><option value="">— Otomatis (AI menentukan saat export) —</option></select>
     <label>Foto (opsional)</label><input type="file" id="add-foto" accept="image/*">
     <div id="add-foto-preview" style="margin:6px 0 12px;"></div>
     <div class="modal-btns">
@@ -1639,6 +1706,8 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
     <label>Tanggal</label><input type="date" id="edit-tanggal">
     <label>Judul</label><input type="text" id="edit-judul">
     <label>Deskripsi</label><textarea id="edit-desc"></textarea>
+    <label>Divisi (opsional)</label>
+    <select id="edit-divisi"><option value="">— Otomatis (AI menentukan saat export) —</option></select>
     <label>Foto (opsional — kosongkan jika tidak ingin mengganti)</label><input type="file" id="edit-foto" accept="image/*">
     <div id="edit-foto-preview" style="margin:6px 0 12px;"></div>
     <div class="modal-btns">
@@ -1652,6 +1721,16 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
   <img id="lightbox-img" src="" alt="Foto kegiatan">
 </div>
 <script>
+const DAFTAR_DIVISI_FRONTEND = ${JSON.stringify(DAFTAR_DIVISI)};
+function populateDivisiSelect(selectId) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  sel.innerHTML = '<option value="">— Otomatis (AI menentukan saat export) —</option>' +
+    DAFTAR_DIVISI_FRONTEND.map(d => '<option value="'+d+'">'+d+'</option>').join('');
+}
+populateDivisiSelect('add-divisi');
+populateDivisiSelect('edit-divisi');
+
 let allData = [];
 async function loadData() {
   const bulan = document.getElementById('filter-bulan').value;
@@ -1676,7 +1755,8 @@ function renderTimeline() {
     const monthYr = item.tanggal?.replace(/^\\d+\\s*/, '') || '';
     const fotoUrl = (item.foto || '').replace(/'/g, '&#39;');
     const fotoHTML = item.foto ? '<img src="'+fotoUrl+'" loading="lazy" onclick="openLightbox(\\''+fotoUrl+'\\')" onerror="this.outerHTML=\\'<div class=&quot;card-nofoto&quot;>📷</div>\\'">' : '<div class="card-nofoto">📷</div>';
-    return '<div class="tl-item"><div class="bubble"><span class="day">'+day+'</span><span class="myr">'+monthYr+'</span></div><div class="card">'+fotoHTML+'<div class="card-body"><div class="card-judul">"'+(item.judul||'Tanpa Judul')+'"</div><div class="card-desc">'+(item.deskripsi||'')+'</div><div class="card-actions"><button class="btn-edit" onclick="openEdit(\\''+item.id+'\\')"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Edit</button><button class="btn-del" onclick="hapus(\\''+item.id+'\\')"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg> Hapus</button></div></div></div></div>';
+    const divisiHTML = item.divisi ? '<div class="card-divisi">'+item.divisi+'</div>' : '';
+    return '<div class="tl-item"><div class="bubble"><span class="day">'+day+'</span><span class="myr">'+monthYr+'</span></div><div class="card">'+fotoHTML+'<div class="card-body">'+divisiHTML+'<div class="card-judul">"'+(item.judul||'Tanpa Judul')+'"</div><div class="card-desc">'+(item.deskripsi||'')+'</div><div class="card-actions"><button class="btn-edit" onclick="openEdit(\\''+item.id+'\\')"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Edit</button><button class="btn-del" onclick="hapus(\\''+item.id+'\\')"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg> Hapus</button></div></div></div></div>';
   }).join('');
 }
 const NAMA_BULAN_ID = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
@@ -1723,6 +1803,7 @@ function openEdit(id) {
   document.getElementById('edit-tanggal').value = isoTanggal;
   document.getElementById('edit-judul').value = item.judul || '';
   document.getElementById('edit-desc').value = item.deskripsi || '';
+  document.getElementById('edit-divisi').value = item.divisi || '';
   editFotoBase64 = null;
   document.getElementById('edit-foto').value = '';
   document.getElementById('edit-foto-preview').innerHTML = item.foto
@@ -1743,6 +1824,7 @@ function openAddModal() {
   document.getElementById('add-tanggal').value = new Date().toISOString().slice(0,10);
   document.getElementById('add-judul').value = '';
   document.getElementById('add-desc').value = '';
+  document.getElementById('add-divisi').value = '';
   document.getElementById('add-foto').value = '';
   document.getElementById('add-foto-preview').innerHTML = '';
   addFotoBase64 = null;
@@ -1787,6 +1869,7 @@ async function simpanTambah() {
   const tanggalISO = document.getElementById('add-tanggal').value;
   const judul = document.getElementById('add-judul').value.trim();
   const deskripsi = document.getElementById('add-desc').value.trim();
+  const divisi = document.getElementById('add-divisi').value;
   if (!judul || !deskripsi) { alert('Judul dan deskripsi wajib diisi'); return; }
   const btn = document.getElementById('add-save-btn');
   const btnHtmlAsli = btn.innerHTML;
@@ -1795,7 +1878,7 @@ async function simpanTambah() {
     const r = await fetch('/api/kegiatan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tanggalISO, judul, deskripsi, fotoBase64: addFotoBase64 })
+      body: JSON.stringify({ tanggalISO, judul, deskripsi, divisi, fotoBase64: addFotoBase64 })
     });
     if (!r.ok) throw new Error('gagal');
     const hasil = await r.json();
@@ -2003,6 +2086,7 @@ async function saveEdit() {
   const judul = document.getElementById('edit-judul').value;
   const deskripsi = document.getElementById('edit-desc').value;
   const tanggalISO = document.getElementById('edit-tanggal').value;
+  const divisi = document.getElementById('edit-divisi').value;
   const btn = document.querySelector('#modal .btn-save');
   const btnHtmlAsli = btn.innerHTML;
   btn.disabled = true; btn.textContent = 'Menyimpan...';
@@ -2010,7 +2094,7 @@ async function saveEdit() {
     const r = await fetch('/api/kegiatan/' + id, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ judul, deskripsi, tanggalISO, fotoBase64: editFotoBase64 })
+      body: JSON.stringify({ judul, deskripsi, tanggalISO, divisi, fotoBase64: editFotoBase64 })
     });
     if (!r.ok) throw new Error('gagal');
     const hasil = await r.json();
