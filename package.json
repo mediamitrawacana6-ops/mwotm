@@ -13,6 +13,7 @@
     "docx": "^9.7.1",
     "express": "^4.22.2",
     "googleapis": "^144.0.0",
+    "mammoth": "^1.8.0",
     "sharp": "^0.33.5"
   },
   "engines": {
