@@ -31,6 +31,20 @@ const GOOGLE_REFRESH_TOKEN = process.env.GOOGLE_REFRESH_TOKEN || '';
 const WEBSITE_BASE_URL = process.env.WEBSITE_BASE_URL || 'https://mitrawacana.or.id'; // sumber sinkronisasi berita kegiatan
 const WEBSITE_KATEGORI_SLUG = process.env.WEBSITE_KATEGORI_SLUG || 'berita'; // hanya ambil dari kategori ini
 
+// Folder Drive berisi jurnal harian (Google Docs/teks) — default diambil dari folder
+// yang dibagikan: https://drive.google.com/drive/folders/1wKxO-dVPZaDhEPWu5PMnggpXcugEtAR1
+// Folder ini WAJIB sudah di-share (minimal "Viewer") ke akun Gmail yang dipakai untuk
+// OAuth2 (GOOGLE_REFRESH_TOKEN), sama seperti folder foto GDRIVE_FOLDER_ID.
+const JURNAL_FOLDER_ID = process.env.JURNAL_FOLDER_ID || '1wKxO-dVPZaDhEPWu5PMnggpXcugEtAR1';
+
+// Google Calendar untuk sinkronisasi jadwal kegiatan — default dari kalender yang dibagikan:
+// https://calendar.google.com/calendar/u/0/newembed?...&src=mediamitrawacana6@gmail.com
+// Kalender ini WAJIB sudah di-share ke akun Gmail yang dipakai untuk OAuth2 dengan izin
+// minimal "Lihat semua detail acara", DAN token OAuth2 (GOOGLE_REFRESH_TOKEN) harus dibuat
+// dengan scope tambahan "https://www.googleapis.com/auth/calendar.readonly" (selain scope
+// Drive yang sudah ada) — lihat get-refresh-token.js, tambahkan scope ini lalu generate ulang.
+const CALENDAR_ID = process.env.CALENDAR_ID || 'mediamitrawacana6@gmail.com';
+
 const DATA_FILE = './data/kegiatan.json';
 if (!fs.existsSync('./data')) fs.mkdirSync('./data', { recursive: true });
 
@@ -81,6 +95,25 @@ function getDrive() {
     return driveClient;
   } catch (e) {
     console.error('❌ Gagal setup OAuth2 Google Drive:', e.message);
+    return null;
+  }
+}
+
+// ── Google Calendar setup (pakai OAuth2 yang sama dengan Drive) ──
+let calendarClient = null;
+function getCalendar() {
+  if (calendarClient) return calendarClient;
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET || !GOOGLE_REFRESH_TOKEN) {
+    console.warn('⚠️  GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REFRESH_TOKEN belum diisi — sync kalender tidak akan berfungsi.');
+    return null;
+  }
+  try {
+    const oauth2Client = new google.auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET);
+    oauth2Client.setCredentials({ refresh_token: GOOGLE_REFRESH_TOKEN });
+    calendarClient = google.calendar({ version: 'v3', auth: oauth2Client });
+    return calendarClient;
+  } catch (e) {
+    console.error('❌ Gagal setup OAuth2 Google Calendar:', e.message);
     return null;
   }
 }
@@ -393,6 +426,7 @@ const DAFTAR_DIVISI = [
   'Divisi Penelitian dan Advokasi',
   'Divisi Media & Pengelolaan Pengetahuan',
   'Divisi Pendidikan & Pengorganisasian Masyarakat',
+  'Project Manager',
 ];
 
 // ── Hashtag divisi untuk input WA ─────────────────────────
@@ -412,6 +446,11 @@ const DIVISI_HASHTAG_MAP = {
   pendidikan: 'Divisi Pendidikan & Pengorganisasian Masyarakat',
   pengorganisasian: 'Divisi Pendidikan & Pengorganisasian Masyarakat',
   masyarakat: 'Divisi Pendidikan & Pengorganisasian Masyarakat',
+  projectmanager: 'Project Manager',
+  pm: 'Project Manager',
+  manajemenproyek: 'Project Manager',
+  manajerproyek: 'Project Manager',
+  proyek: 'Project Manager',
 };
 
 // Deteksi tagar divisi di dalam teks bebas, keluarkan tagar tsb dari teks, dan
@@ -469,6 +508,7 @@ async function buatHighlightUntukTabel(items) {
    - "Divisi Penelitian dan Advokasi" — riset, kajian, advokasi kebijakan, audiensi DPRD/pemerintah, pemantauan regulasi.
    - "Divisi Media & Pengelolaan Pengetahuan" — publikasi, media, webinar, dokumentasi, pengelolaan pengetahuan/informasi, media sosial.
    - "Divisi Pendidikan & Pengorganisasian Masyarakat" — edukasi, sosialisasi, pelatihan masyarakat/komunitas, pendampingan lembaga/kelompok masyarakat, pengorganisasian warga.
+   - "Project Manager" — perencanaan & koordinasi proyek lintas divisi, penyusunan timeline/RAB proyek, monitoring & evaluasi progres proyek, rapat koordinasi internal tim, pelaporan proyek ke funder/mitra.
    Kalau ambigu, pilih yang isi kegiatannya PALING dominan.
 
 Daftar kegiatan:
@@ -585,7 +625,7 @@ async function buatDocxRingkasan(kegiatanTerpilih, labelPeriode) {
   }));
 
   // Kelompokkan per divisi mengikuti urutan tetap di DAFTAR_DIVISI; divisi yang
-  // tidak dikenali (di luar 4 daftar resmi) dikumpulkan di grup "Lainnya" di akhir.
+  // tidak dikenali (di luar daftar resmi) dikumpulkan di grup "Lainnya" di akhir.
   const grupPerDivisi = new Map();
   [...DAFTAR_DIVISI, 'Lainnya'].forEach(d => grupPerDivisi.set(d, []));
   baris.forEach(b => {
@@ -984,6 +1024,225 @@ app.post('/api/sync/website', async (req, res) => {
   } catch (e) {
     console.error('❌ Gagal sinkron website:', e.message);
     res.status(500).json({ error: 'Gagal sinkron dari website: ' + e.message });
+  }
+});
+
+// ── SINKRONISASI: ambil kegiatan dari jurnal harian di folder Google Drive ──
+// Folder berisi file jurnal (Google Docs atau file teks .txt) — 1 file biasanya
+// mewakili 1 hari/1 kegiatan. Sistem membaca isi tiap file yang BELUM pernah
+// diproses (dilacak lewat field "sumberFileId" pada data kegiatan tersimpan),
+// lalu memakai AI untuk merapikan jadi judul + deskripsi kegiatan e-magazine.
+//
+// Catatan dukungan format:
+// - Google Docs (application/vnd.google-apps.document) → diekspor sebagai teks polos.
+// - File Word yang diupload (.docx) → teks diekstrak pakai library "mammoth".
+// - File teks biasa (.txt, text/plain) → dibaca langsung.
+// - Format lain (gambar, spreadsheet, .doc lama, PDF, dst) DILEWATI untuk saat ini — kalau
+//   jurnal kamu berformat lain, konversi dulu ke salah satu format di atas, atau beri tahu
+//   supaya dukungan formatnya bisa ditambahkan.
+async function ambilFileJurnalBelumDiproses(idYangSudahDiproses = []) {
+  const drive = getDrive();
+  if (!drive || !JURNAL_FOLDER_ID) return [];
+  try {
+    const res = await drive.files.list({
+      q: `'${JURNAL_FOLDER_ID}' in parents and trashed = false and (mimeType = 'application/vnd.google-apps.document' or mimeType = 'text/plain' or mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')`,
+      fields: 'files(id, name, mimeType, createdTime, modifiedTime)',
+      orderBy: 'createdTime asc',
+      pageSize: 100,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+    const semua = res.data.files || [];
+    return semua.filter(f => !idYangSudahDiproses.includes(f.id));
+  } catch (e) {
+    console.error('❌ Gagal ambil daftar file jurnal Drive:', e.message);
+    return [];
+  }
+}
+
+// Ambil isi teks dari 1 file jurnal (Google Docs diekspor sebagai text/plain, file .txt dibaca langsung).
+async function ambilTeksFileJurnal(file) {
+  const drive = getDrive();
+  if (!drive) return null;
+  try {
+    if (file.mimeType === 'application/vnd.google-apps.document') {
+      const res = await drive.files.export(
+        { fileId: file.id, mimeType: 'text/plain' },
+        { responseType: 'text' }
+      );
+      return typeof res.data === 'string' ? res.data : String(res.data);
+    }
+    if (file.mimeType === 'text/plain') {
+      const buf = await downloadDriveFile(file.id);
+      return buf ? buf.toString('utf8') : null;
+    }
+    if (file.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+      const buf = await downloadDriveFile(file.id);
+      if (!buf) return null;
+      const mammoth = require('mammoth');
+      const hasil = await mammoth.extractRawText({ buffer: buf });
+      return hasil.value || null;
+    }
+    return null; // format tidak didukung
+  } catch (e) {
+    console.error(`❌ Gagal baca isi jurnal "${file.name}":`, e.message);
+    return null;
+  }
+}
+
+// Ubah 1 file jurnal jadi 1 entri kegiatan e-magazine. Kalau nama file atau isi jurnal
+// menyebutkan tanggal, dipakai sebagai tanggal kegiatan; kalau tidak, pakai tanggal file
+// dibuat di Drive sebagai cadangan.
+async function prosesJurnalJadiKegiatan(file, teksMentah) {
+  const { divisi: divisiTerdeteksi, teksBersih } = deteksiDivisiDiTeksServer(teksMentah);
+
+  const tanggalTerdeteksi =
+    cariTanggalDiTeksServer(file.name) ||
+    cariTanggalDiTeksServer(teksBersih);
+  const tanggalDate = tanggalTerdeteksi || new Date(file.createdTime || file.modifiedTime || Date.now());
+  const tanggal = formatTanggal(tanggalDate);
+  const timestamp = Math.floor(tanggalDate.getTime() / 1000);
+
+  const deskripsi = await rapikanDeskripsi(teksBersih || file.name);
+  const judul = await ekstrakJudul(deskripsi);
+
+  return {
+    id: `${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
+    tanggal,
+    timestamp,
+    judul,
+    deskripsi,
+    foto: null,
+    fotoDriveId: null,
+    divisi: divisiTerdeteksi,
+    sumber: 'jurnal',
+    sumberFileId: file.id,
+  };
+}
+
+// ── ENDPOINT: trigger sinkronisasi dari jurnal harian di Google Drive ──
+app.post('/api/sync/jurnal', async (req, res) => {
+  try {
+    console.log('🔄 Mulai sinkron jurnal harian dari Google Drive...');
+    const data = loadData();
+    const idSudahDiproses = data.map(d => d.sumberFileId).filter(Boolean);
+
+    const fileList = await ambilFileJurnalBelumDiproses(idSudahDiproses);
+    let ditambah = 0, dilewati = 0;
+
+    for (const file of fileList) {
+      const teks = await ambilTeksFileJurnal(file);
+      if (!teks || !teks.trim()) { dilewati++; continue; }
+      const kegiatanBaru = await prosesJurnalJadiKegiatan(file, teks);
+      data.push(kegiatanBaru);
+      ditambah++;
+    }
+    saveData(data);
+
+    console.log(`✅ Sinkron jurnal selesai: ${ditambah} kegiatan baru, ${dilewati} dilewati.`);
+    res.json({ ok: true, diperiksa: fileList.length, ditambah, dilewati });
+  } catch (e) {
+    console.error('❌ Gagal sinkron jurnal Drive:', e.message);
+    res.status(500).json({ error: 'Gagal sinkron dari jurnal Drive: ' + e.message });
+  }
+});
+
+// ── SINKRONISASI: ambil kegiatan dari Google Calendar ─────────────────────
+// Setiap event pada kalender organisasi dalam rentang tanggal tertentu diubah jadi
+// 1 entri kegiatan e-magazine. Judul event dipakai sebagai judul kegiatan; deskripsi
+// event (kalau ada) dirapikan oleh AI, kalau kosong dibuat deskripsi generik dari
+// judul + waktu + lokasi event.
+async function ambilEventKalender(dariISO, sampaiISO) {
+  const calendar = getCalendar();
+  if (!calendar) throw new Error('Google Calendar belum terhubung (cek GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN dan scope calendar.readonly)');
+
+  const hasil = [];
+  let pageToken = undefined;
+  do {
+    const resp = await calendar.events.list({
+      calendarId: CALENDAR_ID,
+      timeMin: new Date(`${dariISO}T00:00:00`).toISOString(),
+      timeMax: new Date(`${sampaiISO}T23:59:59`).toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime',
+      maxResults: 250,
+      pageToken,
+    });
+    (resp.data.items || []).forEach(ev => {
+      if (ev.status === 'cancelled') return;
+      const mulai = ev.start?.dateTime || ev.start?.date;
+      if (!mulai) return;
+      hasil.push({
+        id: ev.id,
+        judul: ev.summary || 'Kegiatan Tanpa Judul',
+        deskripsi: ev.description || '',
+        lokasi: ev.location || '',
+        tanggalISO: mulai.slice(0, 10),
+      });
+    });
+    pageToken = resp.data.nextPageToken;
+  } while (pageToken);
+
+  return hasil;
+}
+
+async function prosesEventJadiKegiatan(event) {
+  const [th, bl, hr] = event.tanggalISO.split('-').map(Number);
+  const tanggalDate = new Date(th, bl - 1, hr);
+  const tanggal = formatTanggal(tanggalDate);
+  const timestamp = Math.floor(tanggalDate.getTime() / 1000);
+
+  const { divisi: divisiTerdeteksi, teksBersih: judulBersih } = deteksiDivisiDiTeksServer(event.judul);
+
+  let deskripsi;
+  if (event.deskripsi && event.deskripsi.trim()) {
+    deskripsi = await rapikanDeskripsi(event.deskripsi);
+  } else {
+    const konteks = `Kegiatan "${judulBersih}" dijadwalkan pada ${tanggal}${event.lokasi ? ` di ${event.lokasi}` : ''}.`;
+    deskripsi = await rapikanDeskripsi(konteks);
+  }
+
+  return {
+    id: `${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
+    tanggal,
+    timestamp,
+    judul: judulBersih.trim() || event.judul,
+    deskripsi,
+    foto: null,
+    fotoDriveId: null,
+    divisi: divisiTerdeteksi,
+    sumber: 'calendar',
+    sumberEventId: event.id,
+  };
+}
+
+// ── ENDPOINT: trigger sinkronisasi dari Google Calendar (dipanggil manual oleh admin) ──
+app.post('/api/sync/calendar', async (req, res) => {
+  try {
+    const dariISO   = req.body?.dariISO;
+    const sampaiISO = req.body?.sampaiISO;
+    if (!dariISO || !sampaiISO) return res.status(400).json({ error: 'Tanggal dari dan sampai wajib diisi' });
+    console.log(`🔄 Mulai sinkron Google Calendar periode ${dariISO} s/d ${sampaiISO}...`);
+
+    const eventList = await ambilEventKalender(dariISO, sampaiISO);
+    const data = loadData();
+    const idSudahAda = new Set(data.map(d => d.sumberEventId).filter(Boolean));
+
+    let ditambah = 0, dilewati = 0;
+    for (const event of eventList) {
+      if (idSudahAda.has(event.id)) { dilewati++; continue; }
+      const kegiatanBaru = await prosesEventJadiKegiatan(event);
+      data.push(kegiatanBaru);
+      idSudahAda.add(event.id);
+      ditambah++;
+    }
+    saveData(data);
+
+    console.log(`✅ Sinkron kalender selesai: ${ditambah} kegiatan baru, ${dilewati} dilewati (sudah ada).`);
+    res.json({ ok: true, ditemukan: eventList.length, ditambah, dilewati });
+  } catch (e) {
+    console.error('❌ Gagal sinkron Google Calendar:', e.message);
+    res.status(500).json({ error: 'Gagal sinkron dari Google Calendar: ' + e.message });
   }
 });
 
@@ -1635,6 +1894,8 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
     <button class="btn-gen" onclick="bukaPrintModal()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg> Print / PDF</button>
     <button class="btn-gen" onclick="buatCarousel()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg> Buat Carousel IG</button>
     <button class="btn-gen" id="sync-website-btn" onclick="syncWebsite()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg> Sync dari Website</button>
+    <button class="btn-gen" id="sync-jurnal-btn" onclick="syncJurnal()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> Sync dari Jurnal Drive</button>
+    <button class="btn-gen" id="sync-calendar-btn" onclick="syncCalendar()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> Sync dari Kalender</button>
     <button class="btn-gen" onclick="bukaExportDocxModal()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/><line x1="9" y1="11" x2="15" y2="11"/></svg> Ringkasan DOCX</button>
   </div>
 </div>
@@ -2096,6 +2357,48 @@ async function syncWebsite() {
     loadData();
   } catch (e) {
     alert('Gagal sinkron dari website: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.innerHTML = asli;
+  }
+}
+
+async function syncJurnal() {
+  const btn = document.getElementById('sync-jurnal-btn');
+  const asli = btn.innerHTML;
+  btn.disabled = true; btn.textContent = 'Menyinkron jurnal...';
+  try {
+    const r = await fetch('/api/sync/jurnal', { method: 'POST' });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Gagal sinkron jurnal');
+    alert('Sinkron jurnal selesai!\\nFile diperiksa: ' + d.diperiksa + '\\nKegiatan baru: ' + d.ditambah + '\\nDilewati (sudah pernah diproses / tidak didukung): ' + d.dilewati);
+    loadData();
+  } catch (e) {
+    alert('Gagal sinkron dari jurnal Drive: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.innerHTML = asli;
+  }
+}
+
+async function syncCalendar() {
+  const dariISO = prompt('Sinkron kalender dari tanggal (YYYY-MM-DD):', new Date().toISOString().slice(0,8) + '01');
+  if (!dariISO) return;
+  const sampaiISO = prompt('Sampai tanggal (YYYY-MM-DD):', new Date().toISOString().slice(0,10));
+  if (!sampaiISO) return;
+  const btn = document.getElementById('sync-calendar-btn');
+  const asli = btn.innerHTML;
+  btn.disabled = true; btn.textContent = 'Menyinkron kalender...';
+  try {
+    const r = await fetch('/api/sync/calendar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dariISO, sampaiISO })
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Gagal sinkron kalender');
+    alert('Sinkron kalender selesai!\\nEvent ditemukan: ' + d.ditemukan + '\\nKegiatan baru: ' + d.ditambah + '\\nDilewati (sudah ada): ' + d.dilewati);
+    loadData();
+  } catch (e) {
+    alert('Gagal sinkron dari Google Calendar: ' + e.message);
   } finally {
     btn.disabled = false; btn.innerHTML = asli;
   }
