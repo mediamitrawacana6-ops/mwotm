@@ -991,7 +991,7 @@ app.post('/api/sync/website', async (req, res) => {
 // Filter berdasarkan rentang tanggal ATAU kata kunci (cari di judul + deskripsi).
 app.post('/api/export-docx', async (req, res) => {
   try {
-    const { mode, dariISO, sampaiISO, kataKunci } = req.body;
+    const { mode, dariISO, sampaiISO, kataKunci, divisi } = req.body;
     let data = loadData();
     let labelPeriode;
 
@@ -1012,6 +1012,16 @@ app.post('/api/export-docx', async (req, res) => {
       const sampaiTs = Math.floor(new Date(thS, blS - 1, hrS, 23, 59, 59).getTime() / 1000);
       data = data.filter(d => (d.timestamp || 0) >= dariTs && (d.timestamp || 0) <= sampaiTs);
       labelPeriode = `Periode: ${formatTanggal(new Date(thD, blD - 1, hrD))} – ${formatTanggal(new Date(thS, blS - 1, hrS))}`;
+    }
+
+    // Filter tambahan opsional berdasarkan divisi — bisa digabung dengan mode tanggal
+    // ATAU kata kunci di atas. Hanya kegiatan yang SUDAH punya divisi eksplisit
+    // tersimpan (dari form web atau tagar WA) yang bisa cocok di sini, karena
+    // klasifikasi otomatis oleh AI baru terjadi saat dokumen DOCX dibuat, bukan
+    // saat kegiatan disimpan.
+    if (divisi && DAFTAR_DIVISI.includes(divisi)) {
+      data = data.filter(d => d.divisi === divisi);
+      labelPeriode += ` · Divisi: ${divisi}`;
     }
 
     data.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
@@ -1667,6 +1677,9 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
     <div id="docx-filter-kata-kunci" style="display:none;">
       <label>Kata Kunci</label><input type="text" id="docx-kata-kunci" placeholder="mis: pornografi, migran, gender">
     </div>
+    <label>Divisi (opsional)</label>
+    <select id="docx-divisi-select"><option value="">— Semua Divisi —</option></select>
+    <p style="color:#666;font-size:0.85rem;margin-top:-4px;margin-bottom:10px;">Hanya berlaku untuk kegiatan yang sudah punya divisi tersimpan (dipilih manual di form Tambah/Edit, atau lewat tagar divisi di WA).</p>
     <p style="color:#666;font-size:0.85rem;margin-top:10px;">File akan berisi tabel highlight (Output, Kegiatan, Deskripsi Singkat) yang dibuat otomatis dari kegiatan yang cocok dengan filter di atas. Maksimal 60 kegiatan per file.</p>
     <div class="modal-btns">
       <button class="btn-cancel" onclick="closeExportDocxModal()">Batal</button>
@@ -1730,6 +1743,12 @@ function populateDivisiSelect(selectId) {
 }
 populateDivisiSelect('add-divisi');
 populateDivisiSelect('edit-divisi');
+(function populateDocxDivisiSelect() {
+  const sel = document.getElementById('docx-divisi-select');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">— Semua Divisi —</option>' +
+    DAFTAR_DIVISI_FRONTEND.map(d => '<option value="'+d+'">'+d+'</option>').join('');
+})();
 
 let allData = [];
 async function loadData() {
@@ -1992,6 +2011,7 @@ function bukaExportDocxModal() {
   const modal = document.getElementById('export-docx-modal');
   document.getElementById('docx-mode-select').value = 'tanggal';
   document.getElementById('docx-kata-kunci').value = '';
+  document.getElementById('docx-divisi-select').value = '';
   gantiModeExportDocx();
   const hariIni = new Date().toISOString().slice(0, 10);
   const awalBulan = hariIni.slice(0, 8) + '01';
@@ -2007,7 +2027,7 @@ function gantiModeExportDocx() {
 }
 async function exportDocx() {
   const mode = document.getElementById('docx-mode-select').value;
-  const body = { mode };
+  const body = { mode, divisi: document.getElementById('docx-divisi-select').value };
   if (mode === 'tanggal') {
     body.dariISO = document.getElementById('docx-dari-tanggal').value;
     body.sampaiISO = document.getElementById('docx-sampai-tanggal').value;
