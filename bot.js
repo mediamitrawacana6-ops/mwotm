@@ -4,6 +4,10 @@ const path = require('path');
 const axios = require('axios');
 const { google } = require('googleapis');
 const Anthropic = require('@anthropic-ai/sdk');
+const {
+  Document: DocxDocument, Packer, Paragraph, TextRun, Table, TableRow, TableCell,
+  WidthType, ShadingType, BorderStyle, HeadingLevel, VerticalAlign,
+} = require('docx');
 
 const app = express();
 app.use(express.json({ limit: '20mb' }));
@@ -378,6 +382,132 @@ async function rapikanDeskripsi(teksMentah) {
   }
 }
 
+// ── AI: buat "Output" (hasil konkret) + "Deskripsi Singkat" untuk tabel ringkasan DOCX ──
+// Dibuat 1 kali panggilan batch untuk semua kegiatan terpilih (lebih hemat & konsisten
+// formatnya daripada memanggil AI satu-satu per kegiatan).
+async function buatHighlightUntukTabel(items) {
+  // items: [{ judul, deskripsi }]  ->  [{ output, deskripsiSingkat }]
+  const fallback = items.map(it => ({
+    output: '-',
+    deskripsiSingkat: (it.deskripsi || '').split(/(?<=[.!?])\s+/).slice(0, 2).join(' ').slice(0, 200),
+  }));
+  if (!ANTHROPIC_KEY || !items.length) return fallback;
+  try {
+    const client = new Anthropic({ apiKey: ANTHROPIC_KEY });
+    const daftar = items.map((it, i) => `${i + 1}. Judul: "${it.judul}"\nDeskripsi: "${(it.deskripsi || '').slice(0, 600)}"`).join('\n\n');
+    const resp = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 4000,
+      messages: [{
+        role: 'user',
+        content: `Untuk setiap kegiatan organisasi berikut, buatkan dua hal dalam Bahasa Indonesia:\n1. "output": hasil/capaian konkret dari kegiatan itu, maksimal 8 kata (contoh: "50 remaja teredukasi bahaya pornografi", "MoU pendampingan lembaga tercapai"). Kalau tidak ada hasil eksplisit yang disebutkan di deskripsi, buat berdasarkan tujuan kegiatan tersebut.\n2. "deskripsiSingkat": ringkasan singkat 1 kalimat (maksimal 20 kata) dari deskripsi kegiatan tersebut.\n\nDaftar kegiatan:\n${daftar}\n\nJawab HANYA dengan JSON array (tanpa markdown code block, tanpa penjelasan tambahan), urutan dan jumlah entri HARUS SAMA PERSIS dengan daftar kegiatan di atas, format:\n[{"output": "...", "deskripsiSingkat": "..."}, ...]`
+      }]
+    });
+    const teksJson = resp.content[0].text.trim().replace(/^```json\s*|```\s*$/g, '').trim();
+    const hasil = JSON.parse(teksJson);
+    if (!Array.isArray(hasil) || hasil.length !== items.length) return fallback;
+    return hasil.map((h, i) => ({
+      output: (h.output || fallback[i].output || '-').toString().trim(),
+      deskripsiSingkat: (h.deskripsiSingkat || fallback[i].deskripsiSingkat || '').toString().trim(),
+    }));
+  } catch (e) {
+    console.error('❌ Gagal buat highlight tabel DOCX:', e.message);
+    return fallback;
+  }
+}
+
+// ── DOCX: bangun tabel ringkasan (Output | Kegiatan | Deskripsi Singkat) ──
+function buatTabelHighlightDocx(baris) {
+  const warnaUtama = (TEMA_WARNA || '#a6174d').replace('#', '').toUpperCase();
+  const warnaAbu = 'F2F2F2';
+  const lebarKolom = [2500, 3200, 3800]; // total 9500 DXA, dual width (kolom + sel) sesuai gotcha docx-js
+  const lebarTabel = lebarKolom.reduce((a, b) => a + b, 0);
+
+  const headerCell = (teks, width) => new TableCell({
+    width: { size: width, type: WidthType.DXA },
+    shading: { type: ShadingType.CLEAR, fill: warnaUtama },
+    verticalAlign: VerticalAlign.CENTER,
+    margins: { top: 100, bottom: 100, left: 120, right: 120 },
+    children: [new Paragraph({ children: [new TextRun({ text: teks, bold: true, color: 'FFFFFF', size: 21 })] })],
+  });
+
+  const bodyCell = (teks, width, shaded) => new TableCell({
+    width: { size: width, type: WidthType.DXA },
+    shading: shaded ? { type: ShadingType.CLEAR, fill: warnaAbu } : undefined,
+    verticalAlign: VerticalAlign.CENTER,
+    margins: { top: 100, bottom: 100, left: 120, right: 120 },
+    children: [new Paragraph({ children: [new TextRun({ text: teks || '-', size: 20 })] })],
+  });
+
+  const headerRow = new TableRow({
+    tableHeader: true,
+    children: [
+      headerCell('Output', lebarKolom[0]),
+      headerCell('Kegiatan', lebarKolom[1]),
+      headerCell('Deskripsi Singkat', lebarKolom[2]),
+    ],
+  });
+
+  const bodyRows = baris.map((item, i) => new TableRow({
+    children: [
+      bodyCell(item.output, lebarKolom[0], i % 2 === 1),
+      bodyCell(item.kegiatan, lebarKolom[1], i % 2 === 1),
+      bodyCell(item.deskripsiSingkat, lebarKolom[2], i % 2 === 1),
+    ],
+  }));
+
+  return new Table({
+    width: { size: lebarTabel, type: WidthType.DXA },
+    columnWidths: lebarKolom,
+    borders: {
+      top: { style: BorderStyle.SINGLE, size: 4, color: 'CCCCCC' },
+      bottom: { style: BorderStyle.SINGLE, size: 4, color: 'CCCCCC' },
+      left: { style: BorderStyle.SINGLE, size: 4, color: 'CCCCCC' },
+      right: { style: BorderStyle.SINGLE, size: 4, color: 'CCCCCC' },
+      insideHorizontal: { style: BorderStyle.SINGLE, size: 4, color: 'CCCCCC' },
+      insideVertical: { style: BorderStyle.SINGLE, size: 4, color: 'CCCCCC' },
+    },
+    rows: [headerRow, ...bodyRows],
+  });
+}
+
+// ── DOCX: rakit dokumen ringkasan lengkap dari daftar kegiatan terpilih ──
+async function buatDocxRingkasan(kegiatanTerpilih, labelPeriode) {
+  const warnaUtama = (TEMA_WARNA || '#a6174d').replace('#', '').toUpperCase();
+  const highlight = await buatHighlightUntukTabel(
+    kegiatanTerpilih.map(k => ({ judul: k.judul, deskripsi: k.deskripsi }))
+  );
+  const baris = kegiatanTerpilih.map((k, i) => ({
+    output: highlight[i].output,
+    kegiatan: k.judul || 'Tanpa Judul',
+    deskripsiSingkat: highlight[i].deskripsiSingkat,
+  }));
+
+  const doc = new DocxDocument({
+    sections: [{
+      properties: {
+        page: {
+          size: { width: 12240, height: 15840 }, // US Letter, DXA
+          margin: { top: 1000, bottom: 1000, left: 900, right: 900 },
+        },
+      },
+      children: [
+        new Paragraph({
+          heading: HeadingLevel.HEADING_1,
+          children: [new TextRun({ text: `Ringkasan Kegiatan — ${ORG_NAMA}`, bold: true, color: warnaUtama, size: 32 })],
+        }),
+        new Paragraph({
+          spacing: { after: 300 },
+          children: [new TextRun({ text: labelPeriode, italics: true, size: 22, color: '555555' })],
+        }),
+        buatTabelHighlightDocx(baris),
+      ],
+    }],
+  });
+
+  return Packer.toBuffer(doc);
+}
+
 // ── Download media dari Fonnte ────────────────────────────
 async function downloadMediaFonnte(url) {
   try {
@@ -718,6 +848,53 @@ app.post('/api/sync/website', async (req, res) => {
   } catch (e) {
     console.error('❌ Gagal sinkron website:', e.message);
     res.status(500).json({ error: 'Gagal sinkron dari website: ' + e.message });
+  }
+});
+
+// ── Export ringkasan (highlight) kegiatan ke DOCX ──────────
+// Filter berdasarkan rentang tanggal ATAU kata kunci (cari di judul + deskripsi).
+app.post('/api/export-docx', async (req, res) => {
+  try {
+    const { mode, dariISO, sampaiISO, kataKunci } = req.body;
+    let data = loadData();
+    let labelPeriode;
+
+    if (mode === 'kata_kunci') {
+      const kw = (kataKunci || '').trim().toLowerCase();
+      if (!kw) return res.status(400).json({ error: 'Kata kunci wajib diisi' });
+      data = data.filter(d =>
+        (d.judul || '').toLowerCase().includes(kw) ||
+        (d.deskripsi || '').toLowerCase().includes(kw)
+      );
+      labelPeriode = `Kata kunci: "${kataKunci.trim()}"`;
+    } else {
+      // mode 'tanggal' (default)
+      if (!dariISO || !sampaiISO) return res.status(400).json({ error: 'Tanggal dari dan sampai wajib diisi' });
+      const [thD, blD, hrD] = dariISO.split('-').map(Number);
+      const [thS, blS, hrS] = sampaiISO.split('-').map(Number);
+      const dariTs = Math.floor(new Date(thD, blD - 1, hrD, 0, 0, 0).getTime() / 1000);
+      const sampaiTs = Math.floor(new Date(thS, blS - 1, hrS, 23, 59, 59).getTime() / 1000);
+      data = data.filter(d => (d.timestamp || 0) >= dariTs && (d.timestamp || 0) <= sampaiTs);
+      labelPeriode = `Periode: ${formatTanggal(new Date(thD, blD - 1, hrD))} – ${formatTanggal(new Date(thS, blS - 1, hrS))}`;
+    }
+
+    data.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+    if (!data.length) {
+      return res.status(404).json({ error: 'Tidak ada kegiatan yang cocok dengan filter tersebut' });
+    }
+    if (data.length > 60) {
+      return res.status(400).json({ error: `Terlalu banyak kegiatan (${data.length}). Persempit rentang tanggal atau kata kunci (maksimal 60 kegiatan per file).` });
+    }
+
+    const buffer = await buatDocxRingkasan(data, labelPeriode);
+    const namaFile = `Ringkasan-Kegiatan-${Date.now()}.docx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="${namaFile}"`);
+    res.send(buffer);
+  } catch (e) {
+    console.error('❌ Gagal export DOCX:', e.message);
+    res.status(500).json({ error: 'Gagal membuat file DOCX: ' + e.message });
   }
 });
 
@@ -1300,6 +1477,7 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
     <button class="btn-gen" onclick="bukaPrintModal()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg> Print / PDF</button>
     <button class="btn-gen" onclick="buatCarousel()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg> Buat Carousel IG</button>
     <button class="btn-gen" id="sync-website-btn" onclick="syncWebsite()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/></svg> Sync dari Website</button>
+    <button class="btn-gen" onclick="bukaExportDocxModal()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/><line x1="9" y1="11" x2="15" y2="11"/></svg> Ringkasan DOCX</button>
   </div>
 </div>
 <div class="modal-bg" id="carousel-modal">
@@ -1323,6 +1501,28 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
     <div class="modal-btns">
       <button class="btn-cancel" onclick="closePrintModal()">Batal</button>
       <button class="btn-save" onclick="cetakPDF()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg> Print</button>
+    </div>
+  </div>
+</div>
+<div class="modal-bg" id="export-docx-modal">
+  <div class="modal">
+    <h3>Ringkasan DOCX (Output / Kegiatan / Deskripsi)</h3>
+    <label>Filter berdasarkan</label>
+    <select id="docx-mode-select" onchange="gantiModeExportDocx()" style="width:100%;padding:10px;border-radius:8px;border:1px solid #ccc;margin:6px 0 12px;font-size:1rem;">
+      <option value="tanggal">Rentang Tanggal</option>
+      <option value="kata_kunci">Kata Kunci</option>
+    </select>
+    <div id="docx-filter-tanggal">
+      <label>Dari Tanggal</label><input type="date" id="docx-dari-tanggal">
+      <label>Sampai Tanggal</label><input type="date" id="docx-sampai-tanggal">
+    </div>
+    <div id="docx-filter-kata-kunci" style="display:none;">
+      <label>Kata Kunci</label><input type="text" id="docx-kata-kunci" placeholder="mis: pornografi, migran, gender">
+    </div>
+    <p style="color:#666;font-size:0.85rem;margin-top:10px;">File akan berisi tabel highlight (Output, Kegiatan, Deskripsi Singkat) yang dibuat otomatis dari kegiatan yang cocok dengan filter di atas. Maksimal 60 kegiatan per file.</p>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeExportDocxModal()">Batal</button>
+      <button class="btn-save" id="docx-export-btn" onclick="exportDocx()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Buat &amp; Download</button>
     </div>
   </div>
 </div>
@@ -1621,6 +1821,65 @@ async function bukaPrintModal() {
   modal.classList.add('open');
 }
 function closePrintModal() { document.getElementById('print-modal').classList.remove('open'); }
+
+function bukaExportDocxModal() {
+  const modal = document.getElementById('export-docx-modal');
+  document.getElementById('docx-mode-select').value = 'tanggal';
+  document.getElementById('docx-kata-kunci').value = '';
+  gantiModeExportDocx();
+  const hariIni = new Date().toISOString().slice(0, 10);
+  const awalBulan = hariIni.slice(0, 8) + '01';
+  document.getElementById('docx-dari-tanggal').value = awalBulan;
+  document.getElementById('docx-sampai-tanggal').value = hariIni;
+  modal.classList.add('open');
+}
+function closeExportDocxModal() { document.getElementById('export-docx-modal').classList.remove('open'); }
+function gantiModeExportDocx() {
+  const mode = document.getElementById('docx-mode-select').value;
+  document.getElementById('docx-filter-tanggal').style.display = mode === 'tanggal' ? '' : 'none';
+  document.getElementById('docx-filter-kata-kunci').style.display = mode === 'kata_kunci' ? '' : 'none';
+}
+async function exportDocx() {
+  const mode = document.getElementById('docx-mode-select').value;
+  const body = { mode };
+  if (mode === 'tanggal') {
+    body.dariISO = document.getElementById('docx-dari-tanggal').value;
+    body.sampaiISO = document.getElementById('docx-sampai-tanggal').value;
+    if (!body.dariISO || !body.sampaiISO) { alert('Isi tanggal dari dan sampai'); return; }
+  } else {
+    body.kataKunci = document.getElementById('docx-kata-kunci').value.trim();
+    if (!body.kataKunci) { alert('Isi kata kunci'); return; }
+  }
+  const btn = document.getElementById('docx-export-btn');
+  const btnHtmlAsli = btn.innerHTML;
+  btn.disabled = true; btn.textContent = 'Membuat file...';
+  try {
+    const r = await fetch('/api/export-docx', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.error || 'Gagal membuat file DOCX');
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'Ringkasan-Kegiatan.docx';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    closeExportDocxModal();
+  } catch (e) {
+    alert(e.message || 'Gagal membuat file DOCX');
+  } finally {
+    btn.disabled = false; btn.innerHTML = btnHtmlAsli;
+  }
+}
+
 async function cetakPDF() {
   const bulan = document.getElementById('print-bulan-select').value;
   document.getElementById('filter-bulan').value = bulan;
