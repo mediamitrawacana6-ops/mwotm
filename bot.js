@@ -422,7 +422,7 @@ async function buatHighlightUntukTabel(items) {
           role: 'user',
           content: `Untuk setiap kegiatan organisasi berikut, buatkan tiga hal dalam Bahasa Indonesia:
 
-1. "output": hasil/capaian konkret dari kegiatan itu, maksimal 8 kata (contoh: "50 remaja teredukasi bahaya pornografi", "MoU pendampingan lembaga tercapai"). WAJIB DIISI — jangan pernah kosong atau "-". Kalau tidak ada hasil eksplisit disebutkan, buat berdasarkan tujuan kegiatan tersebut.
+1. "output": hasil/capaian konkret dari kegiatan itu, ditulis dalam SATU KALIMAT UTUH sekitar 12-20 kata (contoh: "50 remaja di Kalurahan Kalidengen teredukasi tentang bahaya perdagangan orang dan cara pencegahannya", "Tersusun MoU pendampingan korban antara Mitra Wacana dan Polsek Temon sebagai dasar kerja sama lanjutan"). Sertakan detail konkret sejauh tersedia di deskripsi — jumlah peserta, nama tempat/mitra, atau bentuk hasil nyata (dokumen, kesepakatan, keterampilan yang didapat, dsb) — jangan cuma frasa pendek generik. WAJIB DIISI dengan kalimat lengkap — jangan pernah kosong, jangan cuma "-", dan jangan disingkat jadi beberapa kata saja. Kalau deskripsi tidak menyebutkan hasil eksplisit, susun berdasarkan tujuan kegiatan tersebut tapi tetap dalam bentuk kalimat utuh yang informatif.
 
 2. "deskripsiSingkat": ringkasan 1 paragraf utuh (2-3 kalimat mengalir, BUKAN poin-poin) yang merangkum inti kegiatan tersebut.
 
@@ -475,7 +475,7 @@ Jawab HANYA dengan JSON array murni, TANPA markdown code block, TANPA teks pembu
 function buatTabelHighlightDocx(baris) {
   const warnaUtama = (TEMA_WARNA || '#a6174d').replace('#', '').toUpperCase();
   const warnaAbu = 'F2F2F2';
-  const lebarKolom = [500, 1400, 2000, 2400, 3200]; // total 9500 DXA, dual width sesuai gotcha docx-js
+  const lebarKolom = [500, 1300, 2700, 1900, 3100]; // total 9500 DXA — Output diperlebar karena sekarang berupa kalimat utuh
   const lebarTabel = lebarKolom.reduce((a, b) => a + b, 0);
 
   const headerCell = (teks, width) => new TableCell({
