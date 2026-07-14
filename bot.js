@@ -293,9 +293,24 @@ async function restoreDataDariDrive() {
 }
 
 // ── Format tanggal Indonesia ───────────────────────────────
+const NAMA_BULAN_ID = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
 function formatTanggal(date = new Date()) {
-  const bln = ['Januari','Februari','Maret','April','Mei','Juni','Juli','Agustus','September','Oktober','November','Desember'];
-  return `${date.getDate()} ${bln[date.getMonth()]} ${date.getFullYear()}`;
+  return `${date.getDate()} ${NAMA_BULAN_ID[date.getMonth()]} ${date.getFullYear()}`;
+}
+// Cari tanggal yang disebutkan di dalam teks bebas (caption WA / deskripsi hasil AI),
+// misal "Pada 28 Juni, ..." atau "5 hingga 7 Juni 2026" -> ambil tanggal pertama yang disebut.
+// Kalau tahun tidak disebut di teks, pakai tahun berjalan. Return null kalau tidak ketemu.
+function cariTanggalDiTeksServer(teks) {
+  if (!teks) return null;
+  const namaBulanRegex = NAMA_BULAN_ID.join('|');
+  const re = new RegExp('\\b(\\d{1,2})\\b(?:\\s*(?:[-–]|hingga|sampai)\\s*\\d{1,2}\\s*)?\\s+(' + namaBulanRegex + ')\\b(?:\\s+(\\d{4}))?', 'i');
+  const m = teks.match(re);
+  if (!m) return null;
+  const hari = parseInt(m[1], 10);
+  const bulanIdx = NAMA_BULAN_ID.findIndex(b => b.toLowerCase() === m[2].toLowerCase());
+  const tahun = m[3] ? parseInt(m[3], 10) : new Date().getFullYear();
+  if (!hari || hari > 31 || bulanIdx === -1) return null;
+  return new Date(tahun, bulanIdx, hari);
 }
 
 // ── AI: buat deskripsi dari foto ──────────────────────────
@@ -410,7 +425,6 @@ app.post('/webhook/fonnte', async (req, res) => {
     const sender    = body.sender || body.from || '';
     const pesanTeks = body.message || '';
     const mediaUrl  = body.url || '';
-    const tanggal   = formatTanggal(new Date());
 
     if (!mediaUrl && !pesanTeks) {
       console.log('   (dilewati — tidak ada teks maupun media di payload)');
@@ -419,13 +433,20 @@ app.post('/webhook/fonnte', async (req, res) => {
 
     // ── Pesan dengan FOTO langsung (hanya jika paket Fonnte mendukung) ──
     if (mediaUrl) {
-      console.log(`📸 Foto masuk dari grup, tanggal ${tanggal}...`);
+      console.log('📸 Foto masuk dari grup...');
       const buffer = await downloadMediaFonnte(mediaUrl);
       if (!buffer) return;
 
       const imageBase64 = buffer.toString('base64');
       const deskripsi    = await buatDeskripsi(imageBase64, pesanTeks);
       const judul        = await ekstrakJudul(deskripsi);
+
+      // Deteksi tanggal dari caption WA atau dari deskripsi hasil AI; kalau tidak
+      // disebutkan sama sekali, pakai tanggal hari ini pesan diterima.
+      const tanggalTerdeteksi = cariTanggalDiTeksServer(pesanTeks) || cariTanggalDiTeksServer(deskripsi);
+      const tanggalDate = tanggalTerdeteksi || new Date();
+      const tanggal = formatTanggal(tanggalDate);
+      const timestamp = Math.floor(tanggalDate.getTime() / 1000);
 
       const filename = `kegiatan_${Date.now()}.jpg`;
       const driveResult = await uploadKeDrive(buffer, filename);
@@ -434,7 +455,7 @@ app.post('/webhook/fonnte', async (req, res) => {
       data.push({
         id: `${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
         tanggal,
-        timestamp: Math.floor(Date.now()/1000),
+        timestamp,
         judul,
         deskripsi,
         foto: driveResult ? driveResult.directUrl : null,
@@ -444,12 +465,12 @@ app.post('/webhook/fonnte', async (req, res) => {
       saveData(data);
 
       await kirimBalasanWA(sender, `✅ Kegiatan "${judul}" (${tanggal}) berhasil disimpan untuk e-magazine!`);
-      console.log(`   ✅ Disimpan: "${judul}"`);
+      console.log(`   ✅ Disimpan: "${judul}" (${tanggal})`);
     }
 
     // ── Pesan TEKS dengan hashtag — AI cari foto paling relevan dari Drive ──
     else if (pesanTeks && (pesanTeks.toLowerCase().includes('#kegiatan') || pesanTeks.toLowerCase().includes('#rekap'))) {
-      console.log(`📝 Teks kegiatan masuk, tanggal ${tanggal}...`);
+      console.log('📝 Teks kegiatan masuk...');
 
       const bersih = pesanTeks.replace(/#kegiatan|#rekap/gi, '').trim();
 
@@ -472,11 +493,18 @@ app.post('/webhook/fonnte', async (req, res) => {
       }
       const judul = await ekstrakJudul(deskripsi);
 
+      // Deteksi tanggal dari teks pesan atau dari deskripsi hasil AI; kalau tidak
+      // disebutkan sama sekali, pakai tanggal hari ini pesan diterima.
+      const tanggalTerdeteksi = cariTanggalDiTeksServer(bersih) || cariTanggalDiTeksServer(deskripsi);
+      const tanggalDate = tanggalTerdeteksi || new Date();
+      const tanggal = formatTanggal(tanggalDate);
+      const timestamp = Math.floor(tanggalDate.getTime() / 1000);
+
       const data = loadData();
       data.push({
         id: `${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
         tanggal,
-        timestamp: Math.floor(Date.now()/1000),
+        timestamp,
         judul,
         deskripsi,
         foto: fotoCocok ? fotoCocok.directUrl : null,
@@ -490,7 +518,7 @@ app.post('/webhook/fonnte', async (req, res) => {
         ? `\n📷 Foto otomatis dipasangkan dari folder Drive.`
         : `\n📷 Belum ada foto yang cocok — upload foto ke folder Drive lalu kirim ulang kegiatannya jika perlu.`;
       await kirimBalasanWA(sender, balasan);
-      console.log(`   ✅ Disimpan: "${judul}"${fotoCocok ? ' (dengan foto)' : ''}`);
+      console.log(`   ✅ Disimpan: "${judul}" (${tanggal})${fotoCocok ? ' (dengan foto)' : ''}`);
     }
 
   } catch (err) {
@@ -766,13 +794,13 @@ app.delete('/api/kegiatan/:id', async (req, res) => {
   } catch { res.status(500).json({ error: 'Gagal hapus' }); }
 });
 
-app.put('/api/kegiatan/:id', (req, res) => {
+app.put('/api/kegiatan/:id', async (req, res) => {
   try {
     let data = loadData();
     const idx = data.findIndex(d => d.id === req.params.id);
     if (idx === -1) return res.status(404).json({ error: 'Tidak ditemukan' });
 
-    const { tanggalISO, ...rest } = req.body;
+    const { tanggalISO, fotoBase64, ...rest } = req.body;
     const updates = { ...rest };
 
     if (tanggalISO) {
@@ -784,10 +812,36 @@ app.put('/api/kegiatan/:id', (req, res) => {
       }
     }
 
+    let fotoGagal = false;
+    if (fotoBase64) {
+      const matches = fotoBase64.match(/^data:(image\/\w+);base64,(.+)$/);
+      const mimeType = matches ? matches[1] : 'image/jpeg';
+      const base64Data = matches ? matches[2] : fotoBase64;
+      const buffer = Buffer.from(base64Data, 'base64');
+      const ext = mimeType.split('/')[1] || 'jpg';
+      const driveResult = await uploadKeDrive(buffer, `kegiatan_${Date.now()}.${ext}`, mimeType);
+      if (driveResult) {
+        // Hapus foto lama di Drive supaya tidak menumpuk file yang sudah tidak dipakai.
+        const fotoDriveIdLama = data[idx].fotoDriveId;
+        if (fotoDriveIdLama) {
+          const drive = getDrive();
+          if (drive) await drive.files.delete({ fileId: fotoDriveIdLama, supportsAllDrives: true }).catch(() => {});
+        }
+        updates.foto = driveResult.directUrl;
+        updates.fotoDriveId = driveResult.fileId;
+      } else {
+        // Upload gagal -> foto lama (kalau ada) tetap dipakai, jangan ditimpa dengan null.
+        fotoGagal = true;
+      }
+    }
+
     data[idx] = { ...data[idx], ...updates };
     saveData(data);
-    res.json({ ok: true });
-  } catch { res.status(500).json({ error: 'Gagal update' }); }
+    res.json({ ok: true, fotoGagal });
+  } catch (e) {
+    console.error('❌ Gagal update kegiatan:', e.message);
+    res.status(500).json({ error: 'Gagal update' });
+  }
 });
 
 // ── Carousel Instagram ─────────────────────────────────────
@@ -1302,6 +1356,8 @@ html, body { font-family: 'Nunito', sans-serif; background: linear-gradient(160d
     <label>Tanggal</label><input type="date" id="edit-tanggal">
     <label>Judul</label><input type="text" id="edit-judul">
     <label>Deskripsi</label><textarea id="edit-desc"></textarea>
+    <label>Foto (opsional — kosongkan jika tidak ingin mengganti)</label><input type="file" id="edit-foto" accept="image/*">
+    <div id="edit-foto-preview" style="margin:6px 0 12px;"></div>
     <div class="modal-btns">
       <button class="btn-cancel" onclick="closeModal()">Batal</button>
       <button class="btn-save" onclick="saveEdit()"><svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Simpan</button>
@@ -1354,13 +1410,41 @@ function tanggalIdKeISO(tanggalStr) {
   const dd = String(hari).padStart(2, '0');
   return tahun + '-' + mm + '-' + dd;
 }
+// Cari tanggal yang disebutkan di dalam teks bebas, misal:
+// "Pada 28 Juni, Mitra Wacana..." atau "5 hingga 7 Juni 2026" -> ambil tanggal pertama.
+// Kalau tahun tidak disebutkan di teks, pakai tahunDefault (atau tahun berjalan).
+function cariTanggalDiTeks(teks, tahunDefault) {
+  if (!teks) return '';
+  const namaBulanRegex = NAMA_BULAN_ID.join('|');
+  const re = new RegExp('\\b(\\d{1,2})\\b(?:\\s*(?:[-–]|hingga|sampai)\\s*\\d{1,2}\\s*)?\\s+(' + namaBulanRegex + ')\\b(?:\\s+(\\d{4}))?', 'i');
+  const m = teks.match(re);
+  if (!m) return '';
+  const hari = parseInt(m[1], 10);
+  const bulanIdx = NAMA_BULAN_ID.findIndex(b => b.toLowerCase() === m[2].toLowerCase());
+  const tahun = m[3] ? parseInt(m[3], 10) : (tahunDefault || new Date().getFullYear());
+  if (!hari || hari > 31 || bulanIdx === -1) return '';
+  const mm = String(bulanIdx + 1).padStart(2, '0');
+  const dd = String(hari).padStart(2, '0');
+  return tahun + '-' + mm + '-' + dd;
+}
+let editTanggalManual = false;
+let editFotoBase64 = null; // null = foto tidak diganti; string = foto baru dipilih user
 function openEdit(id) {
   const item = allData.find(d => d.id === id);
   if (!item) return;
   document.getElementById('edit-id').value = id;
-  document.getElementById('edit-tanggal').value = tanggalIdKeISO(item.tanggal);
+  editTanggalManual = false;
+  // Kalau tanggal tersimpan tidak bisa diparse (mis. formatnya tidak lengkap),
+  // coba deteksi otomatis dari kalimat pertama deskripsi sebagai cadangan.
+  let isoTanggal = tanggalIdKeISO(item.tanggal) || cariTanggalDiTeks(item.deskripsi || '');
+  document.getElementById('edit-tanggal').value = isoTanggal;
   document.getElementById('edit-judul').value = item.judul || '';
   document.getElementById('edit-desc').value = item.deskripsi || '';
+  editFotoBase64 = null;
+  document.getElementById('edit-foto').value = '';
+  document.getElementById('edit-foto-preview').innerHTML = item.foto
+    ? '<img src="' + item.foto.replace(/"/g,'&quot;') + '" style="max-width:120px;max-height:120px;border-radius:8px;">'
+    : '';
   document.getElementById('modal').classList.add('open');
 }
 function closeModal() { document.getElementById('modal').classList.remove('open'); }
@@ -1371,6 +1455,7 @@ function openLightbox(url) {
 function closeLightbox() { document.getElementById('lightbox').classList.remove('open'); }
 
 let addFotoBase64 = null;
+let addTanggalManual = false;
 function openAddModal() {
   document.getElementById('add-tanggal').value = new Date().toISOString().slice(0,10);
   document.getElementById('add-judul').value = '';
@@ -1378,9 +1463,22 @@ function openAddModal() {
   document.getElementById('add-foto').value = '';
   document.getElementById('add-foto-preview').innerHTML = '';
   addFotoBase64 = null;
+  addTanggalManual = false;
   document.getElementById('add-modal').classList.add('open');
 }
 function closeAddModal() { document.getElementById('add-modal').classList.remove('open'); }
+document.getElementById('add-tanggal').addEventListener('input', () => { addTanggalManual = true; });
+document.getElementById('add-desc').addEventListener('blur', () => {
+  if (addTanggalManual) return; // jangan timpa kalau user sudah pilih tanggal sendiri
+  const iso = cariTanggalDiTeks(document.getElementById('add-desc').value);
+  if (iso) document.getElementById('add-tanggal').value = iso;
+});
+document.getElementById('edit-tanggal').addEventListener('input', () => { editTanggalManual = true; });
+document.getElementById('edit-desc').addEventListener('blur', () => {
+  if (editTanggalManual) return;
+  const iso = cariTanggalDiTeks(document.getElementById('edit-desc').value);
+  if (iso) document.getElementById('edit-tanggal').value = iso;
+});
 document.getElementById('add-foto').addEventListener('change', function(e) {
   const file = e.target.files[0];
   const preview = document.getElementById('add-foto-preview');
@@ -1389,6 +1487,16 @@ document.getElementById('add-foto').addEventListener('change', function(e) {
   reader.onload = function() {
     addFotoBase64 = reader.result;
     preview.innerHTML = '<img src="' + addFotoBase64 + '" style="max-width:120px;max-height:120px;border-radius:8px;">';
+  };
+  reader.readAsDataURL(file);
+});
+document.getElementById('edit-foto').addEventListener('change', function(e) {
+  const file = e.target.files[0];
+  if (!file) return; // batal pilih file -> foto lama tetap dipakai
+  const reader = new FileReader();
+  reader.onload = function() {
+    editFotoBase64 = reader.result;
+    document.getElementById('edit-foto-preview').innerHTML = '<img src="' + editFotoBase64 + '" style="max-width:120px;max-height:120px;border-radius:8px;">';
   };
   reader.readAsDataURL(file);
 });
@@ -1553,8 +1661,25 @@ async function saveEdit() {
   const judul = document.getElementById('edit-judul').value;
   const deskripsi = document.getElementById('edit-desc').value;
   const tanggalISO = document.getElementById('edit-tanggal').value;
-  await fetch('/api/kegiatan/' + id, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({judul, deskripsi, tanggalISO}) });
-  closeModal(); loadData();
+  const btn = document.querySelector('#modal .btn-save');
+  const btnHtmlAsli = btn.innerHTML;
+  btn.disabled = true; btn.textContent = 'Menyimpan...';
+  try {
+    const r = await fetch('/api/kegiatan/' + id, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ judul, deskripsi, tanggalISO, fotoBase64: editFotoBase64 })
+    });
+    if (!r.ok) throw new Error('gagal');
+    const hasil = await r.json();
+    closeModal();
+    loadData();
+    if (hasil.fotoGagal) alert('Perubahan tersimpan, tapi foto baru gagal diupload ke Google Drive. Foto lama (jika ada) tetap dipakai — coba edit lagi untuk mengganti foto.');
+  } catch (e) {
+    alert('Gagal menyimpan perubahan');
+  } finally {
+    btn.disabled = false; btn.innerHTML = btnHtmlAsli;
+  }
 }
 async function hapus(id) {
   if (!confirm('Hapus kegiatan ini?')) return;
@@ -1562,7 +1687,7 @@ async function hapus(id) {
   loadData();
 }
 loadData();
-setInterval(loadData, 60000);
+setInterval(loadData, 120000); // auto-refresh setiap 2 menit
 </script>
 </body>
 </html>`);
